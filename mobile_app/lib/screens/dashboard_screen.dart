@@ -7,6 +7,17 @@ import '../models/sensor_reading.dart';
 import '../models/alert.dart';
 import '../models/user.dart';
 
+Color riskColor(RiskLevel level) {
+  switch (level) {
+    case RiskLevel.normal:
+      return const Color(0xFF2E9E6C);
+    case RiskLevel.caution:
+      return const Color(0xFFE08A1E);
+    case RiskLevel.alert:
+      return const Color(0xFFD93F3F);
+  }
+}
+
 class DashboardScreen extends StatefulWidget {
   final NurseUser user;
   const DashboardScreen({super.key, required this.user});
@@ -30,7 +41,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadSampleData() async {
     try {
-      // Loads this nurse's own sample data — matches widget.user.userId.
+      // Loads this nurse's own sample data.
       final raw = await rootBundle.loadString(widget.user.sampleDataAsset);
       final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
       final readings = decoded
@@ -94,9 +105,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     final reading = _readings[_currentIndex];
-    // Placeholder local risk calc — swap for Person C's real ML output
-    // once it's ready. Nothing else in this screen needs to change.
-    final alert = RiskAlert.fromReading(reading);
+    // Placeholder risk logic. Swap for Person C's real ML output when ready.
+    final alert = RiskAlert.evaluate(_readings, _currentIndex);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7FB),
@@ -185,17 +195,6 @@ class _RiskBanner extends StatelessWidget {
   final RiskAlert alert;
   const _RiskBanner({required this.alert});
 
-  Color _bgColor() {
-    switch (alert.riskLevel) {
-      case RiskLevel.normal:
-        return const Color(0xFF2E9E6C);
-      case RiskLevel.caution:
-        return const Color(0xFFE08A1E);
-      case RiskLevel.alert:
-        return const Color(0xFFD93F3F);
-    }
-  }
-
   IconData _icon() {
     switch (alert.riskLevel) {
       case RiskLevel.normal:
@@ -209,16 +208,17 @@ class _RiskBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final color = riskColor(alert.riskLevel);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 450),
       curve: Curves.easeOutCubic,
       padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 18),
       decoration: BoxDecoration(
-        color: _bgColor(),
+        color: color,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: _bgColor().withOpacity(0.3),
+            color: color.withOpacity(0.3),
             blurRadius: 16,
             offset: const Offset(0, 6),
           ),
@@ -328,13 +328,29 @@ class _PressureRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Expanded(child: _PressureTile(label: 'Heel', value: pressure.heel)),
-        const SizedBox(width: 10),
         Expanded(
-          child: _PressureTile(label: 'Midfoot', value: pressure.midfoot),
+          child: _PressureTile(
+            label: 'Heel',
+            value: pressure.heel,
+            level: RiskThresholds.heel(pressure.heel),
+          ),
         ),
         const SizedBox(width: 10),
-        Expanded(child: _PressureTile(label: 'Toe', value: pressure.toe)),
+        Expanded(
+          child: _PressureTile(
+            label: 'Midfoot',
+            value: pressure.midfoot,
+            level: RiskThresholds.midfoot(pressure.midfoot),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _PressureTile(
+            label: 'Toe',
+            value: pressure.toe,
+            level: RiskThresholds.toe(pressure.toe),
+          ),
+        ),
       ],
     );
   }
@@ -343,15 +359,28 @@ class _PressureRow extends StatelessWidget {
 class _PressureTile extends StatelessWidget {
   final String label;
   final double value;
-  const _PressureTile({required this.label, required this.value});
+  final RiskLevel level;
+  const _PressureTile({
+    required this.label,
+    required this.value,
+    required this.level,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final flagged = level != RiskLevel.normal;
+    final color = riskColor(level);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeOutCubic,
       padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: flagged ? color.withOpacity(0.10) : Colors.white,
         borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: flagged ? color : Colors.transparent,
+          width: 1.5,
+        ),
       ),
       child: Column(
         children: [
@@ -362,10 +391,10 @@ class _PressureTile extends StatelessWidget {
             builder: (context, animatedValue, child) {
               return Text(
                 animatedValue.toStringAsFixed(1),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E),
+                  color: flagged ? color : const Color(0xFF1A1A2E),
                 ),
               );
             },
@@ -387,11 +416,19 @@ class _TemperatureCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final level = RiskThresholds.temperature(temperature);
+    final flagged = level != RiskLevel.normal;
+    final color = riskColor(level);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
       padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 18),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: flagged ? color.withOpacity(0.10) : Colors.white,
         borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: flagged ? color : Colors.transparent,
+          width: 1.5,
+        ),
       ),
       child: Row(
         children: [
@@ -411,10 +448,10 @@ class _TemperatureCard extends StatelessWidget {
             builder: (context, animatedValue, child) {
               return Text(
                 '${animatedValue.toStringAsFixed(1)} °C',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF1A1A2E),
+                  color: flagged ? color : const Color(0xFF1A1A2E),
                 ),
               );
             },

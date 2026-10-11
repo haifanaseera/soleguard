@@ -74,10 +74,7 @@ class ProfileScreen extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     '${user.ward} • ${user.userId}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Colors.black54,
-                    ),
+                    style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                 ],
               ),
@@ -86,14 +83,19 @@ class ProfileScreen extends StatelessWidget {
             _InfoTile(
               icon: Icons.badge_outlined,
               title: 'Device ID',
-              subtitle: 'INSOLE-001',
+              subtitle: user.deviceId,
             ),
             _InfoTile(
+              icon: Icons.science_outlined,
+              title: 'Demo scenario',
+              subtitle: user.scenario,
+            ),
+            const _InfoTile(
               icon: Icons.shield_outlined,
               title: 'Data storage',
               subtitle: 'Local only (demo mode) — no cloud sync',
             ),
-            _InfoTile(
+            const _InfoTile(
               icon: Icons.info_outline,
               title: 'About SoleGuard',
               subtitle: 'Personalized foot-risk monitoring for diabetic '

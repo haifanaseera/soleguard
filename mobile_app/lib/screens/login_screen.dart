@@ -77,6 +77,14 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
+  void _fillDemo(String username) {
+    setState(() {
+      _usernameController.text = username;
+      _passwordController.text = AuthService.demoPassword;
+      _errorText = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -126,8 +134,7 @@ class _LoginScreenState extends State<LoginScreen>
                   AnimatedBuilder(
                     animation: _shakeController,
                     builder: (context, child) {
-                      final offset =
-                          _shakeOffset(_shakeController.value) * 10;
+                      final offset = _shakeOffset(_shakeController.value) * 10;
                       return Transform.translate(
                         offset: Offset(offset, 0),
                         child: child,
@@ -140,9 +147,10 @@ class _LoginScreenState extends State<LoginScreen>
                         children: [
                           TextFormField(
                             controller: _usernameController,
+                            autocorrect: false,
                             decoration: InputDecoration(
                               labelText: 'Username',
-                              hintText: 'e.g. nurse.a',
+                              hintText: 'e.g. n1',
                               prefixIcon: const Icon(Icons.person_outline),
                               filled: true,
                               fillColor: Colors.white,
@@ -153,8 +161,8 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                             validator: (value) =>
                                 (value == null || value.trim().isEmpty)
-                                ? 'Enter your username'
-                                : null,
+                                    ? 'Enter your username'
+                                    : null,
                           ),
                           const SizedBox(height: 14),
                           TextFormField(
@@ -182,8 +190,8 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                             validator: (value) =>
                                 (value == null || value.isEmpty)
-                                ? 'Enter your password'
-                                : null,
+                                    ? 'Enter your password'
+                                    : null,
                             onFieldSubmitted: (_) => _submit(),
                           ),
                         ],
@@ -260,16 +268,54 @@ class _LoginScreenState extends State<LoginScreen>
                   ),
                   const SizedBox(height: 18),
                   Container(
-                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: Colors.blueGrey.shade50,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Text(
-                      'Demo accounts: nurse.a / nurse.b / nurse.c\n'
-                      'Password: password123',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: Colors.black54),
+                    child: Theme(
+                      data: Theme.of(context).copyWith(
+                        dividerColor: Colors.transparent,
+                      ),
+                      child: ExpansionTile(
+                        tilePadding: const EdgeInsets.symmetric(horizontal: 14),
+                        childrenPadding: const EdgeInsets.only(bottom: 8),
+                        title: const Text(
+                          'Demo accounts (tap one to fill)',
+                          style: TextStyle(fontSize: 13, color: Colors.black54),
+                        ),
+                        subtitle: const Text(
+                          'Usernames n1 to n10, password: password123',
+                          style: TextStyle(fontSize: 11.5, color: Colors.black45),
+                        ),
+                        children: [
+                          for (final u in AuthService.demoUsers)
+                            ListTile(
+                              dense: true,
+                              visualDensity: VisualDensity.compact,
+                              onTap: () => _fillDemo(u.username),
+                              leading: CircleAvatar(
+                                radius: 13,
+                                backgroundColor: u.accentColor,
+                                child: Text(
+                                  u.username,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              title: Text(
+                                u.scenario,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              subtitle: Text(
+                                '${u.displayName} • ${u.ward}',
+                                style: const TextStyle(fontSize: 11.5),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 24),

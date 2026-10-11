@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import '../models/sensor_reading.dart';
 import '../models/alert.dart';
 import '../models/user.dart';
+import 'dashboard_screen.dart' show riskColor;
 
 class HistoryScreen extends StatefulWidget {
   final NurseUser user;
@@ -17,6 +18,9 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   List<SensorReading> _readings = [];
   bool _loading = true;
+  int _zone = 0; // 0 = heel, 1 = midfoot, 2 = toe
+
+  static const _zoneNames = ['Heel', 'Midfoot', 'Toe'];
 
   @override
   void initState() {
@@ -35,13 +39,28 @@ class _HistoryScreenState extends State<HistoryScreen> {
     });
   }
 
+  double _zoneValue(SensorReading r) {
+    switch (_zone) {
+      case 1:
+        return r.pressure.midfoot;
+      case 2:
+        return r.pressure.toe;
+      default:
+        return r.pressure.heel;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final heelValues = _readings.map((r) => r.pressure.heel).toList();
+    final values = _readings.map(_zoneValue).toList();
+    final alerts = List.generate(
+      _readings.length,
+      (i) => RiskAlert.evaluate(_readings, i),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7FB),
@@ -72,26 +91,35 @@ class _HistoryScreenState extends State<HistoryScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Heel pressure trend',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                  Text(
+                    '${_zoneNames[_zone]} pressure trend',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
+                  SegmentedButton<int>(
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(value: 0, label: Text('Heel')),
+                      ButtonSegment(value: 1, label: Text('Midfoot')),
+                      ButtonSegment(value: 2, label: Text('Toe')),
+                    ],
+                    selected: {_zone},
+                    onSelectionChanged: (s) => setState(() => _zone = s.first),
+                  ),
+                  const SizedBox(height: 16),
                   SizedBox(
                     height: 80,
                     child: CustomPaint(
                       size: Size.infinite,
-                      painter: _SparklinePainter(values: heelValues),
+                      painter: _SparklinePainter(values: values),
                     ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 20),
-            ..._readings.reversed.map((reading) {
-              final alert = RiskAlert.fromReading(reading);
-              return _HistoryTile(reading: reading, alert: alert);
-            }),
+            for (int i = _readings.length - 1; i >= 0; i--)
+              _HistoryTile(reading: _readings[i], alert: alerts[i]),
           ],
         ),
       ),
@@ -104,19 +132,12 @@ class _HistoryTile extends StatelessWidget {
   final RiskAlert alert;
   const _HistoryTile({required this.reading, required this.alert});
 
-  Color _color() {
-    switch (alert.riskLevel) {
-      case RiskLevel.normal:
-        return const Color(0xFF2E9E6C);
-      case RiskLevel.caution:
-        return const Color(0xFFE08A1E);
-      case RiskLevel.alert:
-        return const Color(0xFFD93F3F);
-    }
-  }
+  String _two(int n) => n.toString().padLeft(2, '0');
 
   @override
   Widget build(BuildContext context) {
+    final color = riskColor(alert.riskLevel);
+    final t = reading.timestamp;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -125,13 +146,14 @@ class _HistoryTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              color: _color(),
-              shape: BoxShape.circle,
+          Padding(
+            padding: const EdgeInsets.only(top: 5),
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
           ),
           const SizedBox(width: 12),
@@ -140,30 +162,44 @@ class _HistoryTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${reading.timestamp.hour.toString().padLeft(2, '0')}:'
-                  '${reading.timestamp.minute.toString().padLeft(2, '0')}:'
-                  '${reading.timestamp.second.toString().padLeft(2, '0')}',
+                  '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)}',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
+                const SizedBox(height: 2),
                 Text(
-                  'Heel ${reading.pressure.heel.toStringAsFixed(1)} • '
+                  'H ${reading.pressure.heel.toStringAsFixed(1)} • '
+                  'M ${reading.pressure.midfoot.toStringAsFixed(1)} • '
+                  'T ${reading.pressure.toe.toStringAsFixed(1)} • '
                   '${reading.temperatureCelsius.toStringAsFixed(1)}°C • '
                   '${reading.motionState}',
                   style: const TextStyle(fontSize: 12, color: Colors.black54),
                 ),
+                if (alert.reason != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      alert.reason!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: color,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: _color().withOpacity(0.12),
+              color: color.withOpacity(0.12),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
               riskLevelToString(alert.riskLevel),
               style: TextStyle(
-                color: _color(),
+                color: color,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
@@ -184,9 +220,10 @@ class _SparklinePainter extends CustomPainter {
     if (values.isEmpty) return;
     final maxV = values.reduce((a, b) => a > b ? a : b);
     final minV = values.reduce((a, b) => a < b ? a : b);
-    final range = (maxV - minV).abs() < 0.001 ? 1 : (maxV - minV);
+    final double range = (maxV - minV).abs() < 0.001 ? 1.0 : (maxV - minV);
 
-    final dx = size.width / (values.length - 1).clamp(1, 1000);
+    final double dx =
+        values.length > 1 ? size.width / (values.length - 1) : size.width;
     final points = <Offset>[];
     for (int i = 0; i < values.length; i++) {
       final normalized = (values[i] - minV) / range;
