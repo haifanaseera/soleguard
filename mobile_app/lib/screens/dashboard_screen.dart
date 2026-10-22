@@ -18,6 +18,13 @@ Color riskColor(RiskLevel level) {
   }
 }
 
+/// A zone (or the temperature card) is highlighted when the ML alert's
+/// reason names it, using the alert's own risk level.
+RiskLevel zoneLevel(RiskAlert alert, String keyword) {
+  final reason = (alert.reason ?? '').toLowerCase();
+  return reason.contains(keyword) ? alert.riskLevel : RiskLevel.normal;
+}
+
 class DashboardScreen extends StatefulWidget {
   final NurseUser user;
   const DashboardScreen({super.key, required this.user});
@@ -28,10 +35,15 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   List<SensorReading> _readings = [];
+  List<RiskAlert> _alerts = [];
   int _currentIndex = 0;
   Timer? _timer;
   bool _loading = true;
   String? _error;
+
+  /// alerts_*.json sits next to the nurse's sample_shift_*.json file.
+  String get _alertsAsset =>
+      widget.user.sampleDataAsset.replaceFirst('sample_shift_', 'alerts_');
 
   @override
   void initState() {
@@ -48,8 +60,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => SensorReading.fromJson(e as Map<String, dynamic>))
           .toList();
 
+      // Alerts from Person C's ML module: one per reading, same order.
+      final alertsRaw = await rootBundle.loadString(_alertsAsset);
+      final alerts = (jsonDecode(alertsRaw) as List<dynamic>)
+          .map((e) => RiskAlert.fromJson(e as Map<String, dynamic>))
+          .toList();
+      if (alerts.length != readings.length) {
+        throw StateError(
+          'alerts (${alerts.length}) and readings (${readings.length}) '
+          'do not match',
+        );
+      }
+
       setState(() {
         _readings = readings;
+        _alerts = alerts;
         _loading = false;
       });
 
@@ -105,8 +130,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     final reading = _readings[_currentIndex];
-    // Placeholder risk logic. Swap for Person C's real ML output when ready.
-    final alert = RiskAlert.evaluate(_readings, _currentIndex);
+    // Risk level and reason come from Person C's ML module (alerts_*.json).
+    final alert = _alerts[_currentIndex];
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7FB),
@@ -172,9 +197,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  _PressureRow(pressure: reading.pressure),
+                  _PressureRow(pressure: reading.pressure, alert: alert),
                   const SizedBox(height: 20),
-                  _TemperatureCard(temperature: reading.temperatureCelsius),
+                  _TemperatureCard(
+                    temperature: reading.temperatureCelsius,
+                    alert: alert,
+                  ),
                   const SizedBox(height: 20),
                   _FooterInfo(
                     reading: reading,
@@ -322,7 +350,8 @@ class _MetaChip extends StatelessWidget {
 
 class _PressureRow extends StatelessWidget {
   final PressureReading pressure;
-  const _PressureRow({required this.pressure});
+  final RiskAlert alert;
+  const _PressureRow({required this.pressure, required this.alert});
 
   @override
   Widget build(BuildContext context) {
@@ -332,7 +361,7 @@ class _PressureRow extends StatelessWidget {
           child: _PressureTile(
             label: 'Heel',
             value: pressure.heel,
-            level: RiskThresholds.heel(pressure.heel),
+            level: zoneLevel(alert, 'heel'),
           ),
         ),
         const SizedBox(width: 10),
@@ -340,7 +369,7 @@ class _PressureRow extends StatelessWidget {
           child: _PressureTile(
             label: 'Midfoot',
             value: pressure.midfoot,
-            level: RiskThresholds.midfoot(pressure.midfoot),
+            level: zoneLevel(alert, 'midfoot'),
           ),
         ),
         const SizedBox(width: 10),
@@ -348,7 +377,7 @@ class _PressureRow extends StatelessWidget {
           child: _PressureTile(
             label: 'Toe',
             value: pressure.toe,
-            level: RiskThresholds.toe(pressure.toe),
+            level: zoneLevel(alert, 'toe'),
           ),
         ),
       ],
@@ -412,11 +441,12 @@ class _PressureTile extends StatelessWidget {
 
 class _TemperatureCard extends StatelessWidget {
   final double temperature;
-  const _TemperatureCard({required this.temperature});
+  final RiskAlert alert;
+  const _TemperatureCard({required this.temperature, required this.alert});
 
   @override
   Widget build(BuildContext context) {
-    final level = RiskThresholds.temperature(temperature);
+    final level = zoneLevel(alert, 'temperature');
     final flagged = level != RiskLevel.normal;
     final color = riskColor(level);
     return AnimatedContainer(

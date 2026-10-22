@@ -17,6 +17,7 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   List<SensorReading> _readings = [];
+  List<RiskAlert> _alerts = [];
   bool _loading = true;
   int _zone = 0; // 0 = heel, 1 = midfoot, 2 = toe
 
@@ -31,10 +32,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _load() async {
     final raw = await rootBundle.loadString(widget.user.sampleDataAsset);
     final decoded = jsonDecode(raw) as List<dynamic>;
+    final readings = decoded
+        .map((e) => SensorReading.fromJson(e as Map<String, dynamic>))
+        .toList();
+
+    // Alerts from Person C's ML module: one per reading, same order.
+    final alertsAsset =
+        widget.user.sampleDataAsset.replaceFirst('sample_shift_', 'alerts_');
+    final alertsRaw = await rootBundle.loadString(alertsAsset);
+    final alerts = (jsonDecode(alertsRaw) as List<dynamic>)
+        .map((e) => RiskAlert.fromJson(e as Map<String, dynamic>))
+        .toList();
+
     setState(() {
-      _readings = decoded
-          .map((e) => SensorReading.fromJson(e as Map<String, dynamic>))
-          .toList();
+      _readings = readings;
+      _alerts = alerts;
       _loading = false;
     });
   }
@@ -57,10 +69,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
 
     final values = _readings.map(_zoneValue).toList();
-    final alerts = List.generate(
-      _readings.length,
-      (i) => RiskAlert.evaluate(_readings, i),
-    );
+    final alerts = _alerts;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7FB),
