@@ -1,0 +1,80 @@
+[
+  {
+    "device_id": "INSOLE-010",
+    "user_id": "NURSE-J",
+    "timestamp": "2026-09-24T19:00:00",
+    "pressure": {
+      "heel": 85.2,
+      "midfoot": 22.0,
+      "toe": 33.0
+    },
+    "temperature_celsius": 37.6,
+    "motion_state": "standing",
+    "battery_percent": 52
+  },
+  {
+    "device_id": "INSOLE-010",
+    "user_id": "NURSE-J",
+    "timestamp": "2026-09-24T19:00:05",
+    "pressure": {
+      "heel": 81.4,
+      "midfoot": 21.0,
+      "toe": 32.0
+    },
+    "temperature_celsius": 37.2,
+    "motion_state": "standing",
+    "battery_percent": 52
+  },
+  {
+    "device_id": "INSOLE-010",
+    "user_id": "NURSE-J",
+    "timestamp": "2026-09-24T19:00:10",
+    "pressure": {
+      "heel": 66.3,
+      "midfoot": 20.0,
+      "toe": 31.0
+    },
+    "temperature_celsius": 36.8,
+    "motion_state": "walking",
+    "battery_percent": 52
+  },
+  {
+    "device_id": "INSOLE-010",
+    "user_id": "NURSE-J",
+    "timestamp": "2026-09-24T19:00:15",
+    "pressure": {
+      "heel": 52.0,
+      "midfoot": 19.0,
+      "toe": 29.5
+    },
+    "temperature_celsius": 35.4,
+    "motion_state": "walking",
+    "battery_percent": 51
+  },
+  {
+    "device_id": "INSOLE-010",
+    "user_id": "NURSE-J",
+    "timestamp": "2026-09-24T19:00:20",
+    "pressure": {
+      "heel": 45.5,
+      "midfoot": 18.5,
+      "toe": 28.8
+    },
+    "temperature_celsius": 34.2,
+    "motion_state": "walking",
+    "battery_percent": 51
+  },
+  {
+    "device_id": "INSOLE-010",
+    "user_id": "NURSE-J",
+    "timestamp": "2026-09-24T19:00:25",
+    "pressure": {
+      "heel": 42.8,
+      "midfoot": 18.0,
+      "toe": 28.0
+    },
+    "temperature_celsius": 33.6,
+    "motion_state": "walking",
+    "battery_percent": 51
+  }
+]
