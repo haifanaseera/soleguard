@@ -287,11 +287,10 @@ void setupBle() {
       BLE_CHAR_UUID,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
 
-  // Older ESP32 core versions (2.x) need this descriptor for notifications.
-  // Core 3.x adds it automatically.
-#if !defined(ESP_ARDUINO_VERSION_MAJOR) || (ESP_ARDUINO_VERSION_MAJOR < 3)
+  // This descriptor (CCCD, 0x2902) is what lets the phone switch
+  // notifications on. Without it, apps like nRF Connect do not show the
+  // notify button. Added on every core version.
   bleChar->addDescriptor(new BLE2902());
-#endif
 
   service->start();
 
