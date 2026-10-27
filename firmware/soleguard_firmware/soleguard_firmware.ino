@@ -28,9 +28,18 @@
 // ===================== CONFIGURATION ============================
 #define SIMULATE_SENSORS 1        // 1 = fake data, 0 = real sensors
 #define PRETTY_PRINT     0        // 0 = one compact line, 1 = multi-line
+#define ENABLE_BLE       1        // 1 = also send each reading to the phone over Bluetooth LE
 
 const char* DEVICE_ID = "INSOLE-001";
 const char* USER_ID   = "NURSE-A";
+
+// ---- BLE identifiers (share these with the mobile app teammate) ----
+// The phone scans for BLE_DEVICE_NAME, connects, and subscribes
+// (notifications) to the characteristic below.
+#define BLE_DEVICE_NAME  "SoleGuard-001"
+#define BLE_SERVICE_UUID "5a3b0001-6f1e-4c1a-9a53-501e6a7d0001"
+#define BLE_CHAR_UUID    "5a3b0002-6f1e-4c1a-9a53-501e6a7d0001"
+#define BLE_CHUNK_SIZE   20       // bytes per notification (safe for the default BLE MTU)
 
 const unsigned long SAMPLE_INTERVAL_MS = 1000;   // one reading per second
 
@@ -223,9 +232,96 @@ void getTimestamp(char *out, size_t len) {
   strftime(out, len, "%Y-%m-%dT%H:%M:%S", &t);
 }
 
-// ===================== JSON OUTPUT ==============================
-// Builds the JSON by hand (no library) so key order and number format
-// stay exactly what the data contract shows.
+// ===================== JSON BUILDER =============================
+// Builds the compact one-line JSON by hand (no library) so key order and
+// number format stay exactly what the data contract shows. Used for both
+// Serial and BLE, so the two outputs are always identical.
+void buildJson(char *out, size_t len, const Reading &r, const char *timestamp) {
+  // Missing temperature sensor -> null instead of invalid "nan"
+  char tempStr[16];
+  if (isnan(r.temperatureC)) strcpy(tempStr, "null");
+  else snprintf(tempStr, sizeof(tempStr), "%.1f", r.temperatureC);
+
+  snprintf(out, len,
+    "{\"device_id\":\"%s\",\"user_id\":\"%s\",\"timestamp\":\"%s\","
+    "\"pressure\":{\"heel\":%.1f,\"midfoot\":%.1f,\"toe\":%.1f},"
+    "\"temperature_celsius\":%s,\"motion_state\":\"%s\",\"battery_percent\":%d}",
+    DEVICE_ID, USER_ID, timestamp,
+    r.heel, r.midfoot, r.toe,
+    tempStr, motionToString(r.motion), r.batteryPercent);
+}
+
+// ===================== BLUETOOTH LE =============================
+// The ESP32 acts as a BLE "peripheral". Each reading (~200 bytes) is
+// too big for one BLE packet, so it is sent in 20-byte chunks and ends
+// with a newline ('\n'). The app collects the chunks until it sees '\n',
+// then parses the text as one JSON object.
+#if ENABLE_BLE
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+BLECharacteristic *bleChar = nullptr;
+bool bleConnected = false;
+
+class SoleGuardServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *server) override {
+    bleConnected = true;
+    Serial.println("# BLE: phone connected");   // '#' lines are not JSON
+  }
+  void onDisconnect(BLEServer *server) override {
+    bleConnected = false;
+    Serial.println("# BLE: phone disconnected, advertising again");
+    BLEDevice::startAdvertising();              // let the phone reconnect
+  }
+};
+
+void setupBle() {
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEServer *server = BLEDevice::createServer();
+  server->setCallbacks(new SoleGuardServerCallbacks());
+
+  BLEService *service = server->createService(BLE_SERVICE_UUID);
+  bleChar = service->createCharacteristic(
+      BLE_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+
+  // This descriptor (CCCD, 0x2902) is what lets the phone switch
+  // notifications on. Without it, apps like nRF Connect do not show the
+  // notify button. Added on every core version.
+  bleChar->addDescriptor(new BLE2902());
+
+  service->start();
+
+  BLEAdvertising *adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(BLE_SERVICE_UUID);
+  adv->setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("# BLE: advertising as " BLE_DEVICE_NAME);
+}
+
+// Sends one JSON string (plus a trailing '\n') in small chunks.
+void bleSend(const char *json) {
+  if (!bleConnected || bleChar == nullptr) return;
+
+  size_t total = strlen(json) + 1;   // +1 for the '\n' terminator
+  size_t pos = 0;
+  while (pos < total) {
+    uint8_t chunk[BLE_CHUNK_SIZE];
+    size_t n = 0;
+    while (n < BLE_CHUNK_SIZE && pos < total) {
+      chunk[n++] = (pos < total - 1) ? (uint8_t)json[pos] : (uint8_t)'\n';
+      pos++;
+    }
+    bleChar->setValue(chunk, n);
+    bleChar->notify();
+    delay(10);                       // small gap so packets are not dropped
+  }
+}
+#endif
+
+// ===================== SERIAL OUTPUT ============================
 void printReading(const Reading &r, const char *timestamp) {
   // Missing temperature sensor -> print null instead of invalid "nan"
   char tempStr[16];
@@ -245,13 +341,9 @@ void printReading(const Reading &r, const char *timestamp) {
     Serial.printf("}\n");
   } else {
     // One line per reading = easy for the app/ML code to parse
-    Serial.printf(
-      "{\"device_id\":\"%s\",\"user_id\":\"%s\",\"timestamp\":\"%s\","
-      "\"pressure\":{\"heel\":%.1f,\"midfoot\":%.1f,\"toe\":%.1f},"
-      "\"temperature_celsius\":%s,\"motion_state\":\"%s\",\"battery_percent\":%d}\n",
-      DEVICE_ID, USER_ID, timestamp,
-      r.heel, r.midfoot, r.toe,
-      tempStr, motionToString(r.motion), r.batteryPercent);
+    char json[320];
+    buildJson(json, sizeof(json), r, timestamp);
+    Serial.println(json);
   }
 }
 
@@ -277,6 +369,10 @@ void setup() {
     mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   }
 #endif
+
+#if ENABLE_BLE
+  setupBle();
+#endif
 }
 
 void loop() {
@@ -296,6 +392,12 @@ void loop() {
     char ts[24];
     getTimestamp(ts, sizeof(ts));
 
-    printReading(r, ts);
+    printReading(r, ts);            // Serial (always)
+
+#if ENABLE_BLE
+    char json[320];                 // same JSON, sent to the phone
+    buildJson(json, sizeof(json), r, ts);
+    bleSend(json);
+#endif
   }
 }
