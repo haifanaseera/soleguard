@@ -279,6 +279,7 @@ class SoleGuardServerCallbacks : public BLEServerCallbacks {
 
 void setupBle() {
   BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(247);
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(new SoleGuardServerCallbacks());
 
@@ -302,23 +303,23 @@ void setupBle() {
 }
 
 // Sends one JSON string (plus a trailing '\n') in small chunks.
+
 void bleSend(const char *json) {
   if (!bleConnected || bleChar == nullptr) return;
 
-  size_t total = strlen(json) + 1;   // +1 for the '\n' terminator
-  size_t pos = 0;
-  while (pos < total) {
-    uint8_t chunk[BLE_CHUNK_SIZE];
-    size_t n = 0;
-    while (n < BLE_CHUNK_SIZE && pos < total) {
-      chunk[n++] = (pos < total - 1) ? (uint8_t)json[pos] : (uint8_t)'\n';
-      pos++;
-    }
-    bleChar->setValue(chunk, n);
-    bleChar->notify();
-    delay(10);                       // small gap so packets are not dropped
+  size_t len = strlen(json);
+
+  // One notification must fit within the negotiated MTU.
+  // MTU 247 allows up to 244 bytes of data.
+  if (len > 244) {
+    Serial.println("# BLE ERROR: JSON too long for one notification");
+    return;
   }
+
+  bleChar->setValue((uint8_t*)json, len);
+  bleChar->notify();
 }
+
 #endif
 
 // ===================== SERIAL OUTPUT ============================
