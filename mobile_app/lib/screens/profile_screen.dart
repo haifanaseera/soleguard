@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../models/user.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
@@ -66,6 +67,7 @@ class ProfileScreen extends StatelessWidget {
                   const SizedBox(height: 14),
                   Text(
                     user.displayName,
+                    textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -79,39 +81,41 @@ class ProfileScreen extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 20),
-            _InfoTile(
-              icon: Icons.badge_outlined,
-              title: 'Device ID',
-              subtitle: user.deviceId,
+            const SizedBox(height: 16),
+            _DetailCard(
+              title: 'Health profile',
+              icon: Icons.favorite_border,
+              rows: [
+                ('Age', '${user.age}'),
+                ('Gender', user.gender),
+                ('Diabetes', '${user.diabetesType}, ${user.yearsWithDiabetes} years'),
+                ('Foot sensation', user.footSensation),
+                ('Other conditions', user.otherConditions),
+                ('Years in nursing', '${user.yearsInNursing}'),
+              ],
             ),
-            _InfoTile(
-              icon: Icons.science_outlined,
-              title: 'Demo scenario',
-              subtitle: user.scenario,
+            _DetailCard(
+              title: 'Device and demo',
+              icon: Icons.sensors,
+              rows: [
+                ('Device ID', user.deviceId),
+                ('Demo scenario', user.scenario),
+                ('Data storage', 'Local only (demo mode), no cloud sync'),
+              ],
             ),
-            const _InfoTile(
-              icon: Icons.shield_outlined,
-              title: 'Data storage',
-              subtitle: 'Local only (demo mode) — no cloud sync',
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 0, 4, 16),
+              child: Text(
+                'Profiles and readings are simulated test data, not real people.',
+                style: TextStyle(fontSize: 11.5, color: Colors.black45),
+              ),
             ),
-            const _InfoTile(
-              icon: Icons.info_outline,
-              title: 'About SoleGuard',
-              subtitle: 'Personalized foot-risk monitoring for diabetic '
-                  'nurses, built on live insole pressure and temperature '
-                  'data.',
-            ),
-            const SizedBox(height: 20),
             SizedBox(
               height: 48,
               child: OutlinedButton.icon(
                 onPressed: () => _logout(context),
                 icon: const Icon(Icons.logout, color: Colors.red),
-                label: const Text(
-                  'Log out',
-                  style: TextStyle(color: Colors.red),
-                ),
+                label: const Text('Log out', style: TextStyle(color: Colors.red)),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Colors.red),
                   shape: RoundedRectangleBorder(
@@ -127,43 +131,56 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-class _InfoTile extends StatelessWidget {
-  final IconData icon;
+class _DetailCard extends StatelessWidget {
   final String title;
-  final String subtitle;
-  const _InfoTile({
-    required this.icon,
+  final IconData icon;
+  final List<(String, String)> rows;
+  const _DetailCard({
     required this.title,
-    required this.subtitle,
+    required this.icon,
+    required this.rows,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: const Color(0xFF2E7D6B)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: const TextStyle(fontSize: 12.5, color: Colors.black54),
-                ),
-              ],
-            ),
+          Row(
+            children: [
+              Icon(icon, size: 18, color: const Color(0xFF2E7D6B)),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ],
           ),
+          const SizedBox(height: 10),
+          for (final row in rows)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 120,
+                    child: Text(
+                      row.$1,
+                      style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(row.$2, style: const TextStyle(fontSize: 13)),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

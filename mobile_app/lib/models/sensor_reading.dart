@@ -24,7 +24,7 @@ class SensorReading {
   final DateTime timestamp;
   final PressureReading pressure;
   final double temperatureCelsius;
-  final String motionState;
+  final String motionState; // standing, walking or sitting
   final int batteryPercent;
 
   SensorReading({
@@ -47,7 +47,7 @@ class SensorReading {
       ),
       temperatureCelsius: (json['temperature_celsius'] as num).toDouble(),
       motionState: json['motion_state'] as String,
-      batteryPercent: json['battery_percent'] as int,
+      batteryPercent: (json['battery_percent'] as num).toInt(),
     );
   }
 }

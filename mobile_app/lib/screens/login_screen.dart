@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/user.dart';
 import '../services/auth_service.dart';
 import 'home_shell.dart';
 
@@ -77,16 +78,18 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  void _fillDemo(String username) {
+  void _fillDemo(NurseUser user) {
     setState(() {
-      _usernameController.text = username;
-      _passwordController.text = AuthService.demoPassword;
+      _usernameController.text = user.username;
+      _passwordController.text = AuthService.passwordFor(user);
       _errorText = null;
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final users = widget.authService.users;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7FB),
       body: SafeArea(
@@ -284,15 +287,15 @@ class _LoginScreenState extends State<LoginScreen>
                           style: TextStyle(fontSize: 13, color: Colors.black54),
                         ),
                         subtitle: const Text(
-                          'Usernames n1 to n10, password: password123',
+                          'Username n1 to n10, password p1 to p10 (n7 uses p7)',
                           style: TextStyle(fontSize: 11.5, color: Colors.black45),
                         ),
                         children: [
-                          for (final u in AuthService.demoUsers)
+                          for (final u in users)
                             ListTile(
                               dense: true,
                               visualDensity: VisualDensity.compact,
-                              onTap: () => _fillDemo(u.username),
+                              onTap: () => _fillDemo(u),
                               leading: CircleAvatar(
                                 radius: 13,
                                 backgroundColor: u.accentColor,
@@ -306,12 +309,19 @@ class _LoginScreenState extends State<LoginScreen>
                                 ),
                               ),
                               title: Text(
-                                u.scenario,
+                                u.displayName,
                                 style: const TextStyle(fontSize: 13),
                               ),
                               subtitle: Text(
-                                '${u.displayName} • ${u.ward}',
+                                u.scenario,
                                 style: const TextStyle(fontSize: 11.5),
+                              ),
+                              trailing: Text(
+                                AuthService.passwordFor(u),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black45,
+                                ),
                               ),
                             ),
                         ],

@@ -25,8 +25,8 @@ String riskLevelToString(RiskLevel level) {
   }
 }
 
-/// Placeholder thresholds standing in for Person C's ML module.
-/// Pressure values are in kPa, temperature in °C, standing time in minutes.
+/// Fixed limits used ONLY as a backup when an ML alert file is missing.
+/// The real result comes from the personalized ML alerts (ml_personalization).
 class RiskThresholds {
   static const double heelCaution = 60, heelAlert = 80;
   static const double midfootCaution = 40, midfootAlert = 55;
@@ -65,8 +65,8 @@ class RiskAlert {
     this.reason,
   });
 
-  /// Parses the alert format from the team data contract. Use this once
-  /// Person C's ML module produces real alerts.
+  /// Parses the alert format from the team data contract:
+  /// { "user_id", "timestamp", "risk_level", "reason" }
   factory RiskAlert.fromJson(Map<String, dynamic> json) {
     return RiskAlert(
       userId: json['user_id'] as String,
@@ -83,6 +83,56 @@ class RiskAlert {
       'risk_level': riskLevelToString(riskLevel),
       'reason': reason,
     };
+  }
+
+  bool get isFlagged => riskLevel != RiskLevel.normal;
+
+  /// The reason split into separate lines, first letter capitalised.
+  /// The ML module joins several findings with "; " and the backup rules
+  /// join them with " • ", so both are handled.
+  List<String> get reasonLines {
+    final text = reason;
+    if (text == null || text.trim().isEmpty) return const [];
+    return text
+        .split(RegExp(r';\s*|\s•\s'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .map((s) => s[0].toUpperCase() + s.substring(1))
+        .toList();
+  }
+
+  /// True if the reason text names this body zone, e.g. "heel", "toe",
+  /// "midfoot" or "temperature". Used to highlight the matching tile.
+  /// If the ML wording ever changes, tiles simply stay neutral.
+  bool mentions(String zoneWord) {
+    final text = reason;
+    if (text == null) return false;
+    return text.toLowerCase().contains(zoneWord.toLowerCase());
+  }
+
+  /// The "N.N SD above personal baseline" number the ML module reports for a
+  /// zone, or null when the reason doesn't contain one.
+  double? sdFor(String zoneWord) {
+    final text = reason;
+    if (text == null) return null;
+    final match = RegExp(
+      '${RegExp.escape(zoneWord)}[a-zA-Z ]*?(\\d+(?:\\.\\d+)?) SD',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (match == null) return null;
+    return double.tryParse(match.group(1)!);
+  }
+
+  /// Indexes where a new caution/alert episode begins (a flagged reading
+  /// whose previous reading was normal, or the first reading).
+  static List<int> episodeStarts(List<RiskAlert> alerts) {
+    final starts = <int>[];
+    for (var i = 0; i < alerts.length; i++) {
+      if (alerts[i].isFlagged && (i == 0 || !alerts[i - 1].isFlagged)) {
+        starts.add(i);
+      }
+    }
+    return starts;
   }
 
   /// How long (in minutes) the wearer has been continuously standing,
@@ -104,13 +154,8 @@ class RiskAlert {
     return '$zone pressure $word (${v.toStringAsFixed(1)})';
   }
 
-  /// PLACEHOLDER risk logic, standing in for Person C's ML module.
-  ///
-  /// Looks at one reading (and the readings before it, for how long the
-  /// nurse has been standing) and returns the worst level found. If several
-  /// problems share the worst level, all their reasons are shown.
-  /// When the ML module is ready, replace the calls to this method in
-  /// dashboard_screen.dart and history_screen.dart.
+  /// BACKUP risk rules with fixed limits. Only used if an ML alert file is
+  /// missing or incomplete. These ignore each nurse's personal baseline.
   factory RiskAlert.evaluate(List<SensorReading> readings, int index) {
     final r = readings[index];
     final findings = <_Finding>[];

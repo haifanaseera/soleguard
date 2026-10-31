@@ -1,14 +1,27 @@
 import 'package:flutter/material.dart';
-import 'services/auth_service.dart';
+import 'models/user.dart';
 import 'screens/login_screen.dart';
+import 'services/auth_service.dart';
+import 'services/shift_repository.dart';
 
-void main() {
-  runApp(SoleGuardApp(authService: AuthService()));
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  var users = <NurseUser>[];
+  String? loadError;
+  try {
+    users = await ShiftRepository.loadNurses();
+  } catch (e) {
+    loadError = 'Could not load nurses.json: $e';
+  }
+
+  runApp(SoleGuardApp(authService: AuthService(users), loadError: loadError));
 }
 
 class SoleGuardApp extends StatelessWidget {
   final AuthService authService;
-  const SoleGuardApp({super.key, required this.authService});
+  final String? loadError;
+  const SoleGuardApp({super.key, required this.authService, this.loadError});
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +37,20 @@ class SoleGuardApp extends StatelessWidget {
           indicatorColor: Color(0xFFDDEFE9),
         ),
       ),
-      home: LoginScreen(authService: authService),
+      home: loadError != null
+          ? Scaffold(
+              body: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    loadError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ),
+              ),
+            )
+          : LoginScreen(authService: authService),
     );
   }
 }
