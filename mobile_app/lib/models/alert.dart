@@ -173,12 +173,13 @@ class RiskAlert {
     final toe = RiskThresholds.toe(r.pressure.toe);
     add(toe, _zoneText('Toe', toe, r.pressure.toe));
 
-    final temp = RiskThresholds.temperature(r.temperatureCelsius);
-    final tempWord = temp == RiskLevel.alert ? 'elevated' : 'rising';
-    add(
-      temp,
-      'Temperature $tempWord (${r.temperatureCelsius.toStringAsFixed(1)}°C)',
-    );
+    // The temperature sensor can be unplugged (null): skip that check.
+    final tempValue = r.temperatureCelsius;
+    if (tempValue != null) {
+      final temp = RiskThresholds.temperature(tempValue);
+      final tempWord = temp == RiskLevel.alert ? 'elevated' : 'rising';
+      add(temp, 'Temperature $tempWord (${tempValue.toStringAsFixed(1)}°C)');
+    }
 
     final minutes = standingMinutes(readings, index);
     final standing = minutes >= RiskThresholds.standingAlertMin

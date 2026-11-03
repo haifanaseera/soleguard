@@ -28,7 +28,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _onlyFlagged = widget.shift.alerts.any((a) => a.isFlagged);
   }
 
-  double _zoneValue(SensorReading r) {
+  double? _zoneValue(SensorReading r) {
     switch (_zone) {
       case 1:
         return r.pressure.midfoot;
@@ -206,6 +206,9 @@ class _HistoryTile extends StatelessWidget {
   final RiskAlert alert;
   const _HistoryTile({required this.reading, required this.alert});
 
+  String _tempText(double? t) =>
+      t == null ? 'temp n/a' : '${t.toStringAsFixed(1)}°C';
+
   @override
   Widget build(BuildContext context) {
     final color = riskColor(alert.riskLevel);
@@ -242,7 +245,7 @@ class _HistoryTile extends StatelessWidget {
                   'H ${reading.pressure.heel.toStringAsFixed(1)} • '
                   'M ${reading.pressure.midfoot.toStringAsFixed(1)} • '
                   'T ${reading.pressure.toe.toStringAsFixed(1)} • '
-                  '${reading.temperatureCelsius.toStringAsFixed(1)}°C • '
+                  '${_tempText(reading.temperatureCelsius)} • '
                   '${reading.motionState}',
                   style: const TextStyle(fontSize: 12, color: Colors.black54),
                 ),
@@ -286,7 +289,7 @@ class _HistoryTile extends StatelessWidget {
 /// Line chart of one zone over the whole shift, with a colored band behind
 /// every reading where the ML model raised a caution or alert.
 class _TrendPainter extends CustomPainter {
-  final List<double> values;
+  final List<double?> values; // null = no reading (sensor unplugged)
   final List<RiskLevel> levels;
   _TrendPainter({required this.values, required this.levels});
 
@@ -305,8 +308,14 @@ class _TrendPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty) return;
 
-    final maxV = values.reduce((a, b) => a > b ? a : b);
-    final minV = values.reduce((a, b) => a < b ? a : b);
+    final present = values.whereType<double>().toList();
+    if (present.isEmpty) {
+      _label(canvas, 'No data for this sensor', Offset(8, size.height / 2 - 6));
+      return;
+    }
+
+    final maxV = present.reduce((a, b) => a > b ? a : b);
+    final minV = present.reduce((a, b) => a < b ? a : b);
     final double range = (maxV - minV).abs() < 0.001 ? 1.0 : (maxV - minV);
 
     const topPad = 12.0;
@@ -324,22 +333,30 @@ class _TrendPainter extends CustomPainter {
       );
     }
 
-    final points = <Offset>[];
-    for (var i = 0; i < n; i++) {
-      final normalized = (values[i] - minV) / range;
-      final y = topPad + chartHeight - normalized * chartHeight;
-      points.add(Offset((i + 0.5) * cell, y));
-    }
-
     final line = Paint()
       ..color = const Color(0xFF2E7D6B)
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeJoin = StrokeJoin.round;
 
-    final path = Path()..moveTo(points.first.dx, points.first.dy);
-    for (final p in points.skip(1)) {
-      path.lineTo(p.dx, p.dy);
+    // Draw the line, leaving a gap wherever a value is missing.
+    final path = Path();
+    var penDown = false;
+    for (var i = 0; i < n; i++) {
+      final v = values[i];
+      if (v == null) {
+        penDown = false;
+        continue;
+      }
+      final normalized = (v - minV) / range;
+      final y = topPad + chartHeight - normalized * chartHeight;
+      final x = (i + 0.5) * cell;
+      if (penDown) {
+        path.lineTo(x, y);
+      } else {
+        path.moveTo(x, y);
+        penDown = true;
+      }
     }
     canvas.drawPath(path, line);
 

@@ -23,7 +23,8 @@ class SensorReading {
   final String userId;
   final DateTime timestamp;
   final PressureReading pressure;
-  final double temperatureCelsius;
+  /// Null when the temperature sensor is unplugged.
+  final double? temperatureCelsius;
   final String motionState; // standing, walking or sitting
   final int batteryPercent;
 
@@ -45,7 +46,7 @@ class SensorReading {
       pressure: PressureReading.fromJson(
         json['pressure'] as Map<String, dynamic>,
       ),
-      temperatureCelsius: (json['temperature_celsius'] as num).toDouble(),
+      temperatureCelsius: (json['temperature_celsius'] as num?)?.toDouble(),
       motionState: json['motion_state'] as String,
       batteryPercent: (json['battery_percent'] as num).toInt(),
     );

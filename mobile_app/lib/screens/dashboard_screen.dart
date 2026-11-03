@@ -443,13 +443,48 @@ class _ZoneTile extends StatelessWidget {
   }
 }
 
+/// Shown instead of the temperature when the sensor is unplugged (null).
+class _NoTemperatureCard extends StatelessWidget {
+  const _NoTemperatureCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.sensors_off, color: Colors.black38),
+          SizedBox(width: 12),
+          Text(
+            'Sensor unplugged',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Colors.black45,
+            ),
+          ),
+          Spacer(),
+          Text('Temperature', style: TextStyle(color: Colors.black54)),
+        ],
+      ),
+    );
+  }
+}
+
 class _TemperatureCard extends StatelessWidget {
-  final double temperature;
+  final double? temperature;
   final RiskAlert alert;
   const _TemperatureCard({required this.temperature, required this.alert});
 
   @override
   Widget build(BuildContext context) {
+    final temp = temperature;
+    if (temp == null) return const _NoTemperatureCard();
+
     final flagged = alert.isFlagged && alert.mentions('temperature');
     final color = riskColor(alert.riskLevel);
     final sd = flagged ? alert.sdFor('temperature') : null;
@@ -477,7 +512,7 @@ class _TemperatureCard extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0, end: temperature),
+            tween: Tween(begin: 0, end: temp),
             duration: const Duration(milliseconds: 350),
             curve: Curves.easeOutCubic,
             builder: (context, animatedValue, child) {

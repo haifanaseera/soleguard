@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:soleguard_mobile/models/alert.dart';
+import 'package:soleguard_mobile/models/sensor_reading.dart';
 import 'package:soleguard_mobile/services/auth_service.dart';
 import 'package:soleguard_mobile/services/shift_repository.dart';
 
@@ -78,6 +79,22 @@ void main() {
     }
     // ignore: avoid_print
     print('\n$table');
+  });
+
+  test('a null temperature (sensor unplugged) does not crash the app', () {
+    final reading = SensorReading.fromJson({
+      'device_id': 'INSOLE-001',
+      'user_id': 'NURSE-01',
+      'timestamp': '2026-10-08T07:00:00',
+      'pressure': {'heel': 40.0, 'midfoot': 18.0, 'toe': 30.0},
+      'temperature_celsius': null,
+      'motion_state': 'standing',
+      'battery_percent': 80,
+    });
+    expect(reading.temperatureCelsius, isNull);
+    // The backup rules skip the temperature check instead of crashing.
+    final alert = RiskAlert.evaluate([reading], 0);
+    expect(alert.riskLevel, RiskLevel.normal);
   });
 
   test('zone highlighting reads the ML reason text', () {

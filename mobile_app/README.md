@@ -90,6 +90,8 @@ Sensor reading:
 
 `motion_state` is `standing`, `walking` or `sitting` in the sample data.
 
+`temperature_celsius` can be `null` when the temperature sensor is unplugged. The app then shows "Sensor unplugged" and skips the temperature check; the History chart leaves a gap.
+
 Alert (output of the ML module):
 
 ```json
