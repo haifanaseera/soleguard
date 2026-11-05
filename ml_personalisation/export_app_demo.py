@@ -13,9 +13,12 @@
 #       Sensor readings (contract format), 30 s apart.
 #   alerts_nurse01.json ... nurse10.json
 #       ML alerts (contract format), ONE PER READING, same order and
-#       timestamps as the sensor file. The first 60 readings are the
-#       calibration phase (the module is still learning that nurse's
-#       baseline), so they are "normal" with reason null.
+#       timestamps as the sensor file, with plain-language reasons.
+#       They are produced by feeding the readings one at a time to the
+#       same LiveScorer the app would use live. The first 60 readings
+#       are the calibration phase (still learning that nurse's
+#       baseline): "normal" with reason null, unless a reading is above
+#       the safety limits, which is always an alert.
 #   nurses.json
 #       Fictional profiles (name, age, gender, ward, health
 #       conditions, simulated scenario) matching the Excel workbook.
@@ -25,6 +28,7 @@
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -32,7 +36,7 @@ DATA_DIR = HERE.parent / "data"
 OUT_DIR = DATA_DIR / "app_demo"
 sys.path.insert(0, str(HERE))
 
-from personalization import PersonalBaseline, RiskDetector
+from personalization import LiveScorer
 
 CALIBRATION_READINGS = 60  # first 30 minutes (60 x 30 s)
 
@@ -78,30 +82,27 @@ if __name__ == "__main__":
     nurses = []
 
     print(f"{'Nurse':<9} {'Name':<16} normal caution alert")
-    for user_id, readings in cohort.items():
-        number = user_id.split("-")[1]
-        baseline = PersonalBaseline.calibrate(user_id, readings[:CALIBRATION_READINGS])
+    # Baselines are learned in a temporary folder, so nothing extra is saved.
+    with tempfile.TemporaryDirectory() as tmp:
+        scorer = LiveScorer(baseline_dir=tmp, style="plain",
+                            calibration_readings=CALIBRATION_READINGS)
+        for user_id, readings in cohort.items():
+            number = user_id.split("-")[1]
+            alerts = [scorer.process_reading(r) for r in readings]
 
-        alerts = [
-            {"user_id": r["user_id"], "timestamp": r["timestamp"], "risk_level": "normal", "reason": None}
-            for r in readings[:CALIBRATION_READINGS]
-        ]
-        detector = RiskDetector(baseline)
-        alerts += [detector.evaluate(r) for r in readings[CALIBRATION_READINGS:]]
+            write_json(OUT_DIR / f"sample_shift_nurse{number}.json", readings)
+            write_json(OUT_DIR / f"alerts_nurse{number}.json", alerts)
 
-        write_json(OUT_DIR / f"sample_shift_nurse{number}.json", readings)
-        write_json(OUT_DIR / f"alerts_nurse{number}.json", alerts)
+            name, age, gender, ward, yrs, dtype, dyrs, sensation, other, scenario = PROFILES[user_id]
+            nurses.append({
+                "user_id": user_id, "name": name, "age": age, "gender": gender, "ward": ward,
+                "years_in_nursing": yrs, "diabetes_type": dtype, "years_with_diabetes": dyrs,
+                "foot_sensation": sensation, "other_conditions": other,
+                "device_id": readings[0]["device_id"], "scenario": scenario,
+            })
 
-        name, age, gender, ward, yrs, dtype, dyrs, sensation, other, scenario = PROFILES[user_id]
-        nurses.append({
-            "user_id": user_id, "name": name, "age": age, "gender": gender, "ward": ward,
-            "years_in_nursing": yrs, "diabetes_type": dtype, "years_with_diabetes": dyrs,
-            "foot_sensation": sensation, "other_conditions": other,
-            "device_id": readings[0]["device_id"], "scenario": scenario,
-        })
-
-        levels = [a["risk_level"] for a in alerts]
-        print(f"{user_id:<9} {name:<16} {levels.count('normal'):>6} {levels.count('caution'):>7} {levels.count('alert'):>5}")
+            levels = [a["risk_level"] for a in alerts[CALIBRATION_READINGS:]]
+            print(f"{user_id:<9} {name:<16} {levels.count('normal'):>6} {levels.count('caution'):>7} {levels.count('alert'):>5}")
 
     write_json(OUT_DIR / "nurses.json", nurses)
     print(f"\nWrote 21 files into {OUT_DIR}")

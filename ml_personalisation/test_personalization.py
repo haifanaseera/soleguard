@@ -18,7 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from personalization import (
     PersonalBaseline,
     RiskDetector,
+    LiveScorer,
+    process_reading,
+    safety_check,
     MIN_CALIBRATION_READINGS,
+    SAFETY_LIMITS,
 )
 
 
@@ -154,6 +158,167 @@ class TestPersonalization(unittest.TestCase):
 
         self.assertEqual(out_a["risk_level"], "alert")
         self.assertNotEqual(out_b["risk_level"], "alert")
+
+
+class TestSafetyLimits(unittest.TestCase):
+    def test_extreme_single_reading_is_always_an_alert(self):
+        base = PersonalBaseline.calibrate("NURSE-A", normal_calibration())
+        out = RiskDetector(base).evaluate(make_reading(heel=SAFETY_LIMITS["heel"] + 5))
+        self.assertEqual(out["risk_level"], "alert")
+        self.assertIn("safe limit", out["reason"])
+
+    def test_baseline_learned_while_at_risk_still_alerts(self):
+        # A nurse whose "normal" was learned at dangerously high values:
+        # the personal baseline alone would call heel 90 normal.
+        risky = normal_calibration(heel_shift=45)   # heel mean about 85
+        base = PersonalBaseline.calibrate("NURSE-A", risky)
+        out = RiskDetector(base).evaluate(make_reading(heel=88))
+        self.assertEqual(out["risk_level"], "alert")
+
+    def test_just_under_the_limit_is_not_a_safety_alert(self):
+        base = PersonalBaseline.calibrate("NURSE-A", normal_calibration(heel_shift=25))
+        out = RiskDetector(base).evaluate(make_reading(heel=SAFETY_LIMITS["heel"] - 1))
+        self.assertNotIn("safe limit", out["reason"] or "")
+
+    def test_safety_check_alone(self):
+        self.assertEqual(safety_check(make_reading())["risk_level"], "normal")
+        self.assertIsNone(safety_check(make_reading())["reason"])
+        hot = safety_check(make_reading(temp=SAFETY_LIMITS["temperature"] + 0.5))
+        self.assertEqual(hot["risk_level"], "alert")
+
+
+class TestPlainWording(unittest.TestCase):
+    def setUp(self):
+        self.base = PersonalBaseline.calibrate("NURSE-A", normal_calibration())
+
+    def detector(self):
+        return RiskDetector(self.base, style="plain")
+
+    def test_single_heel_wording(self):
+        out = self.detector().evaluate(make_reading(heel=60))
+        self.assertEqual(out["risk_level"], "caution")
+        self.assertEqual(out["reason"], "Heel pressure is well above your usual.")
+
+    def test_two_signals_wording_and_advice(self):
+        out = self.detector().evaluate(make_reading(heel=60, temp=36))
+        self.assertEqual(out["risk_level"], "alert")
+        self.assertIn("Heel pressure and foot temperature are well above your usual.", out["reason"])
+        self.assertIn("check your feet", out["reason"])
+
+    def test_no_technical_jargon(self):
+        out = self.detector().evaluate(make_reading(heel=60, temp=36))
+        self.assertNotIn("SD", out["reason"])
+        self.assertNotIn("baseline", out["reason"])
+
+    def test_reason_only_names_the_zones_involved(self):
+        # The app highlights a zone when its word appears in the reason.
+        toe = self.detector().evaluate(make_reading(toe=48))["reason"].lower()
+        self.assertIn("toe", toe)
+        for other in ("heel", "midfoot", "temperature"):
+            self.assertNotIn(other, toe)
+        heel = self.detector().evaluate(make_reading(heel=60))["reason"].lower()
+        for other in ("toe", "midfoot", "temperature"):
+            self.assertNotIn(other, heel)
+
+    def test_standing_note(self):
+        d = self.detector()
+        for _ in range(9):
+            d.evaluate(make_reading(motion="standing"))
+        out = d.evaluate(make_reading(heel=60, motion="standing"))
+        self.assertIn("standing for about", out["reason"])
+
+    def test_technical_style_unchanged(self):
+        out = RiskDetector(self.base).evaluate(make_reading(heel=60))
+        self.assertIn("SD above personal baseline", out["reason"])
+
+    def test_levels_do_not_depend_on_style(self):
+        for reading in (make_reading(), make_reading(heel=60), make_reading(heel=60, temp=36)):
+            a = RiskDetector(self.base, style="technical").evaluate(reading)["risk_level"]
+            b = RiskDetector(self.base, style="plain").evaluate(reading)["risk_level"]
+            self.assertEqual(a, b)
+
+
+class TestLiveScorer(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def scorer(self):
+        return LiveScorer(baseline_dir=self.tmp.name, calibration_readings=60)
+
+    def feed_calibration(self, scorer, user_id="NURSE-A", n=60):
+        out = None
+        for r in normal_calibration(n=n, user_id=user_id):
+            out = scorer.process_reading(r)
+        return out
+
+    def test_learning_then_ready(self):
+        sc = self.scorer()
+        self.assertEqual(sc.status("NURSE-A")["state"], "learning")
+        self.feed_calibration(sc, n=59)
+        self.assertEqual(sc.status("NURSE-A"), {"state": "learning", "readings": 59, "needed": 60})
+        self.feed_calibration(sc, n=1)
+        self.assertEqual(sc.status("NURSE-A")["state"], "ready")
+        self.assertTrue((Path(self.tmp.name) / "NURSE-A.json").exists())
+
+    def test_learning_phase_reports_normal(self):
+        out = self.feed_calibration(self.scorer(), n=30)
+        self.assertEqual(out["risk_level"], "normal")
+        self.assertIsNone(out["reason"])
+
+    def test_dangerous_reading_alerts_even_while_learning(self):
+        out = self.scorer().process_reading(make_reading(heel=95, user_id="NURSE-NEW"))
+        self.assertEqual(out["risk_level"], "alert")
+
+    def test_scores_after_calibration(self):
+        sc = self.scorer()
+        self.feed_calibration(sc)
+        out = sc.process_reading(make_reading(heel=60, temp=36))
+        self.assertEqual(out["risk_level"], "alert")
+        self.assertEqual(set(out), {"user_id", "timestamp", "risk_level", "reason"})
+
+    def test_baseline_survives_a_restart(self):
+        first = self.scorer()
+        self.feed_calibration(first)
+        second = self.scorer()          # new object, same folder
+        self.assertEqual(second.status("NURSE-A")["state"], "ready")
+        out = second.process_reading(make_reading(heel=60, temp=36))
+        self.assertEqual(out["risk_level"], "alert")
+
+    def test_each_nurse_has_her_own_baseline(self):
+        sc = self.scorer()
+        self.feed_calibration(sc, user_id="NURSE-A")
+        for r in normal_calibration(user_id="NURSE-B", heel_shift=25):
+            sc.process_reading(r)
+        reading = make_reading(heel=65, temp=35.5)
+        a = sc.process_reading(dict(reading, user_id="NURSE-A"))
+        b = sc.process_reading(dict(reading, user_id="NURSE-B"))
+        self.assertEqual(a["risk_level"], "alert")
+        self.assertNotEqual(b["risk_level"], "alert")
+
+    def test_matches_batch_detector(self):
+        readings = normal_calibration(n=60) + [make_reading(heel=60), make_reading(heel=60, temp=36),
+                                               make_reading()]
+        sc = self.scorer()
+        live = [sc.process_reading(r) for r in readings][60:]
+        base = PersonalBaseline.calibrate("NURSE-A", readings[:60])
+        det = RiskDetector(base, style="plain")
+        batch = [det.evaluate(r) for r in readings[60:]]
+        self.assertEqual(live, batch)
+
+    def test_reset_forgets_the_baseline(self):
+        sc = self.scorer()
+        self.feed_calibration(sc)
+        sc.reset("NURSE-A")
+        self.assertEqual(sc.status("NURSE-A")["state"], "learning")
+        self.assertFalse((Path(self.tmp.name) / "NURSE-A.json").exists())
+
+    def test_process_reading_function_with_own_scorer(self):
+        sc = self.scorer()
+        self.feed_calibration(sc)
+        out = process_reading(make_reading(heel=60, temp=36), scorer=sc)
+        self.assertEqual(out["risk_level"], "alert")
+
 
 
 if __name__ == "__main__":
