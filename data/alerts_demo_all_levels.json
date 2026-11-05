@@ -1,0 +1,20 @@
+[
+  {
+    "user_id": "NURSE-A",
+    "timestamp": "2026-10-08T12:00:00",
+    "risk_level": "normal",
+    "reason": null
+  },
+  {
+    "user_id": "NURSE-A",
+    "timestamp": "2026-10-08T12:00:30",
+    "risk_level": "caution",
+    "reason": "heel pressure 6.8 SD above personal baseline"
+  },
+  {
+    "user_id": "NURSE-A",
+    "timestamp": "2026-10-08T12:01:00",
+    "risk_level": "alert",
+    "reason": "heel pressure 10.1 SD above personal baseline; foot temperature 5.0 SD above personal baseline"
+  }
+]
