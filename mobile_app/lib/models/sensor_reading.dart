@@ -16,6 +16,8 @@ class PressureReading {
       toe: (json['toe'] as num).toDouble(),
     );
   }
+
+  Map<String, dynamic> toJson() => {'heel': heel, 'midfoot': midfoot, 'toe': toe};
 }
 
 class SensorReading {
@@ -51,4 +53,16 @@ class SensorReading {
       batteryPercent: (json['battery_percent'] as num).toInt(),
     );
   }
+
+  /// Same key order as the data contract and the insole firmware.
+  Map<String, dynamic> toJson() => {
+        'device_id': deviceId,
+        'user_id': userId,
+        // No milliseconds, like the contract: 2026-10-08T07:55:30
+        'timestamp': timestamp.toIso8601String().split('.').first,
+        'pressure': pressure.toJson(),
+        'temperature_celsius': temperatureCelsius,
+        'motion_state': motionState,
+        'battery_percent': batteryPercent,
+      };
 }

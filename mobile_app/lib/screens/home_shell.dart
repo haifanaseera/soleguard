@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
+import '../services/insole_source.dart';
 import '../services/shift_repository.dart';
 import 'dashboard_screen.dart';
 import 'history_screen.dart';
+import 'live_screen.dart';
 import 'profile_screen.dart';
 
 class HomeShell extends StatefulWidget {
@@ -76,6 +78,14 @@ class _HomeShellState extends State<HomeShell> {
             children: [
               DashboardScreen(user: user, shift: shift),
               HistoryScreen(user: user, shift: shift),
+              LiveScreen(
+                user: user,
+                shift: shift,
+                // Simulated insole for now. When Bluetooth is switched on,
+                // only this line changes.
+                sourceBuilder: () =>
+                    SimulatedInsoleSource(recorded: shift.readings),
+              ),
               ProfileScreen(user: user, authService: widget.authService),
             ],
           ),
@@ -92,6 +102,11 @@ class _HomeShellState extends State<HomeShell> {
                 icon: Icon(Icons.history_outlined),
                 selectedIcon: Icon(Icons.history),
                 label: 'History',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.sensors_outlined),
+                selectedIcon: Icon(Icons.sensors),
+                label: 'Live',
               ),
               NavigationDestination(
                 icon: Icon(Icons.person_outline),

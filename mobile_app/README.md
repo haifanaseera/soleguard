@@ -23,6 +23,7 @@ If an alert file is missing, the app falls back to simple fixed-limit backup rul
 | Login | Sign in as one of the 10 demo nurses. Tap a nurse in the demo list to fill the form. |
 | Dashboard | Risk banner with the ML reasons, heel / midfoot / toe pressure, temperature, motion and battery. Playback controls and a shift timeline. |
 | History | Trend chart (heel, midfoot, toe or temperature) with bands where the ML model raised an alert, counts, and a list of readings. Filter to caution and alert only. |
+| Live | Readings arriving from an insole source, with the risk banner. Works today with a **simulated insole**; the real Bluetooth source plugs in later (see below). |
 | Profile | Nurse details, health profile from `nurses.json`, device ID, demo scenario, log out. |
 
 ### Dashboard details
@@ -30,6 +31,31 @@ If an alert file is missing, the app falls back to simple fixed-limit backup rul
 - **Banner:** shows the ML `risk_level` and every line of the ML `reason`.
 - **Tile colors:** a pressure or temperature tile is highlighted only when the ML reason names that zone, with the SD value from the reason (for example "+3.5 SD"). Because the ML model compares each nurse with their own baseline, a tile is never colored just because a value looks high. If the wording of the ML reason changes, tiles simply stay neutral and the banner is still correct.
 - **Playback:** play/pause, speed (1×, 3×, 10×; 1× is one reading every 3 seconds), **Prev alert / Next alert** buttons that jump to the start of the previous or next caution/alert episode, and a timeline you can tap or drag. Orange and red marks on the timeline show where the ML model raised alerts.
+
+### Live tab
+
+The Live tab shows readings arriving one per second from an *insole source*. Today the source is a **simulated insole** that replays the recorded shift as text in 20-byte chunks, exactly like the real insole's Bluetooth messages, so the whole receiving code is exercised without hardware.
+
+- **Connect / Disconnect**, with a status chip (not connected, connecting, connected, connection problem).
+- **Banner:** if an ML alert exists for the reading's timestamp (the insole currently replays the team's test data, so it does), the banner shows it. Otherwise it uses the simple backup rules and says so.
+- **Warnings:** no data for 5 seconds, or the insole belongs to a different nurse than the one logged in.
+- **Unplugged sensor:** a switch simulates a null temperature, shown as "Sensor unplugged".
+
+## Bluetooth link (from Person A, firmware)
+
+The insole is a BLE server (ESP32); the phone app is the client.
+
+| Item | Value |
+|---|---|
+| Device name | `SoleGuard-001` |
+| Service UUID | `5a3b0001-6f1e-4c1a-9a53-501e6a7d0001` |
+| Characteristic UUID | `5a3b0002-6f1e-4c1a-9a53-501e6a7d0001` (NOTIFY and READ) |
+| Rate | one reading per second |
+| Format | the contract JSON as UTF-8 text, ending with `\n` |
+| Packet size | firmware asks for MTU 247 (one reading per notification); otherwise 20-byte chunks. The app collects bytes until `\n`. |
+| Connections | only one phone at a time |
+
+The receiving code is in `lib/services/` (`line_assembler.dart`, `insole_source.dart`) and is tested by `test/live_test.dart`. The Bluetooth source itself, `ble_pending/ble_sensor_source.dart.txt`, is **written but untested** and not switched on; see `ble_pending/README.txt`.
 
 ## Demo accounts
 
@@ -61,6 +87,12 @@ flutter run -d chrome
 ```
 
 To preview at phone size in Chrome: open developer tools (Ctrl+Shift+I), toggle device mode (Ctrl+Shift+M) and pick a phone.
+
+To check the receiving code (chunk reassembly, parsing, simulated insole):
+
+```bash
+flutter test test/live_test.dart
+```
 
 To check the app against the ML files (10 nurses, 200 readings each, expected alert counts):
 
@@ -109,8 +141,10 @@ Alert (output of the ML module):
 mobile_app/
 ├── pubspec.yaml
 ├── assets/app_demo/           nurses.json, sample shifts and ML alerts
+├── ble_pending/               Bluetooth source, written but untested
 ├── test/
-│   └── risk_scenarios_test.dart
+│   ├── risk_scenarios_test.dart
+│   └── live_test.dart
 └── lib/
     ├── main.dart              app entry, loads nurses, starts at login
     ├── models/
@@ -119,7 +153,9 @@ mobile_app/
     │   └── user.dart              nurse profile
     ├── services/
     │   ├── auth_service.dart      local demo login
-    │   └── shift_repository.dart  loads a shift and pairs readings with ML alerts
+    │   ├── shift_repository.dart  loads a shift and pairs readings with ML alerts
+    │   ├── line_assembler.dart    rebuilds newline-terminated lines from Bluetooth chunks
+    │   └── insole_source.dart     insole source interface and the simulated insole
     ├── widgets/
     │   └── ui_helpers.dart        colors, icons, time formatting
     └── screens/
@@ -127,19 +163,20 @@ mobile_app/
         ├── home_shell.dart        loads the shift once, bottom navigation
         ├── dashboard_screen.dart
         ├── history_screen.dart
+        ├── live_screen.dart
         └── profile_screen.dart
 ```
 
 ## What is real and what is placeholder
 
 - **Risk level:** comes from the ML module's exported alerts. The alerts are precomputed from the sample data, not calculated live in the app.
-- **Sensor data:** recorded sample shifts, not live data from the insole. Bluetooth is not implemented yet.
+- **Sensor data:** the Dashboard and History use recorded sample shifts. The Live tab uses a simulated insole. The real Bluetooth source is written but untested (`ble_pending/`).
 - **Login:** credentials are checked against the demo nurses in `nurses.json`. The passwords are plain text in the source code and there is no server. This is a demo only. Do not use it for real patient data. For production, use a real authentication backend, HTTPS/TLS for all network calls, and encrypted storage on the device.
 - **Nurse profiles:** the names and health details are simulated test data, not real people.
 
 ## Planned next steps
 
-- Connect to the insole over Bluetooth Low Energy once hardware is available.
+- Switch on and test the Bluetooth source on an Android phone with the real insole.
 - Run the ML module on live readings instead of precomputed alerts.
 - Test on Android hardware.
 

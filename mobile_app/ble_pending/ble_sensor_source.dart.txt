@@ -1,0 +1,137 @@
+// ============================================================================
+// UNTESTED. Written from the flutter_blue_plus documentation, without an
+// Android build or the insole. Do not switch it on until the steps in
+// README.txt have been done together, and expect small fixes on first run.
+//
+// To use it: rename this file to  lib/services/ble_insole_source.dart
+// ============================================================================
+import 'dart:async';
+
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+import 'insole_source.dart';
+
+/// Receives live readings from the real insole over Bluetooth Low Energy.
+///
+/// Details from Person A (firmware):
+///  - The ESP32 is the BLE server, the phone is the client.
+///  - Device name: SoleGuard-001
+///  - One characteristic with NOTIFY and READ. Notifications must be switched
+///    on by the app before any data arrives.
+///  - One reading per second, as JSON text (UTF-8) ending with "\n".
+///  - The firmware asks for MTU 247. If the phone agrees, a reading arrives in
+///    one notification, otherwise in 20-byte chunks. ChunkedInsoleSource
+///    already handles both.
+///  - Only ONE phone can be connected at a time.
+class BleInsoleSource extends ChunkedInsoleSource {
+  static const String deviceName = 'SoleGuard-001';
+  static final Guid serviceUuid = Guid('5a3b0001-6f1e-4c1a-9a53-501e6a7d0001');
+  static final Guid characteristicUuid =
+      Guid('5a3b0002-6f1e-4c1a-9a53-501e6a7d0001');
+
+  BluetoothDevice? _device;
+  StreamSubscription<List<int>>? _valueSub;
+  StreamSubscription<BluetoothConnectionState>? _connectionSub;
+  StreamSubscription<List<ScanResult>>? _scanSub;
+  bool _active = false;
+
+  @override
+  String get label => 'Bluetooth: $deviceName';
+
+  @override
+  Future<void> start() async {
+    _active = true;
+    resetBuffer();
+    setStatus(LiveStatus.connecting);
+
+    try {
+      // 1. Bluetooth must be switched on.
+      await FlutterBluePlus.adapterState
+          .where((s) => s == BluetoothAdapterState.on)
+          .first
+          .timeout(const Duration(seconds: 10));
+
+      // 2. Look for the insole. Filters are "or": match by name OR by service.
+      final found = Completer<BluetoothDevice>();
+      _scanSub = FlutterBluePlus.onScanResults.listen((results) {
+        for (final r in results) {
+          final byName = r.advertisementData.advName == deviceName;
+          final byService =
+              r.advertisementData.serviceUuids.contains(serviceUuid);
+          if ((byName || byService) && !found.isCompleted) {
+            found.complete(r.device);
+          }
+        }
+      });
+      await FlutterBluePlus.startScan(
+        withNames: [deviceName],
+        withServices: [serviceUuid],
+        timeout: const Duration(seconds: 15),
+      );
+      final device = await found.future.timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => throw TimeoutException(
+          'Could not find $deviceName. Is it powered on, and is no other '
+          'phone connected to it?',
+        ),
+      );
+      await FlutterBluePlus.stopScan();
+      await _scanSub?.cancel();
+      _scanSub = null;
+      if (!_active) return;
+
+      // 3. Connect. On Android the package asks for a big MTU by itself; the
+      //    firmware asks for 247, so they agree on 247.
+      //    NOTE: some versions of the package want a licence argument here,
+      //    e.g.  device.connect(license: License.nonprofit)  (free for
+      //    students and educational projects). If the compiler asks for it,
+      //    add it.
+      _device = device;
+      _connectionSub = device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected && _active) {
+          setError('The insole disconnected.');
+        }
+      });
+      await device.connect();
+
+      // 4. Find the characteristic and switch notifications on.
+      final services = await device.discoverServices();
+      final service = services.firstWhere((s) => s.uuid == serviceUuid);
+      final characteristic = service.characteristics.firstWhere(
+        (c) => c.uuid == characteristicUuid,
+      );
+      _valueSub = characteristic.onValueReceived.listen(handleBytes);
+      device.cancelWhenDisconnected(_valueSub!);
+      await characteristic.setNotifyValue(true);
+
+      if (_active) setStatus(LiveStatus.connected);
+    } catch (e) {
+      setError('$e');
+      await _cleanup();
+    }
+  }
+
+  Future<void> _cleanup() async {
+    await _scanSub?.cancel();
+    await _valueSub?.cancel();
+    await _connectionSub?.cancel();
+    _scanSub = null;
+    _valueSub = null;
+    _connectionSub = null;
+    try {
+      await FlutterBluePlus.stopScan();
+    } catch (_) {}
+    try {
+      // Always disconnect: the insole accepts only one phone at a time.
+      await _device?.disconnect();
+    } catch (_) {}
+    _device = null;
+  }
+
+  @override
+  Future<void> stop() async {
+    _active = false;
+    await _cleanup();
+    setStatus(LiveStatus.idle);
+  }
+}
