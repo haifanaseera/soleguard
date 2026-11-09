@@ -16,8 +16,11 @@ To switch it on (do this together, once the Android setup works):
  4. Add the Bluetooth permissions to android/app/src/main/AndroidManifest.xml
     (the exact lines depend on the package version, so check its README).
  5. Rename ble_sensor_source.dart.txt to lib/services/ble_insole_source.dart
- 6. In lib/screens/home_shell.dart, change the sourceBuilder line to use
-    BleInsoleSource() instead of SimulatedInsoleSource(...).
+ 6. In lib/screens/home_shell.dart, add this as the FIRST item in the
+    LiveScreen's sources list (the comment there shows it):
+        SourceOption('Bluetooth insole', () => BleInsoleSource()),
+    The simulated insole stays as the second option: a one-tap fallback if
+    Bluetooth fails. Add the import for ble_insole_source.dart too.
  7. Run on the phone: flutter run  (not Chrome).
  8. Check that Chrome still builds: flutter run -d chrome
 

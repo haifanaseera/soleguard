@@ -15,13 +15,19 @@ import '../widgets/ui_helpers.dart';
 class LiveScreen extends StatefulWidget {
   final NurseUser user;
   final ShiftData shift;
-  final InsoleSource Function() sourceBuilder;
+
+  /// All nurses, used to load every nurse's ML alerts.
+  final List<NurseUser> nurses;
+
+  /// Where readings can come from. The first option is selected at the start.
+  final List<SourceOption> sources;
 
   const LiveScreen({
     super.key,
     required this.user,
     required this.shift,
-    required this.sourceBuilder,
+    required this.nurses,
+    required this.sources,
   });
 
   @override
@@ -49,10 +55,19 @@ class _LiveScreenState extends State<LiveScreen> {
   /// insole replays the team's test data, its readings match these alerts.
   late final Map<DateTime, RiskAlert> _mlByTime;
 
+  /// ML alerts of all nurses, so the banner follows whichever nurse the
+  /// insole is sending data for. Loads in the background.
+  AlertLibrary? _library;
+
+  int _sourceIndex = 0;
+
   @override
   void initState() {
     super.initState();
     _mlByTime = {for (final a in widget.shift.alerts) a.timestamp: a};
+    ShiftRepository.loadAlertLibrary(widget.nurses).then((library) {
+      if (mounted) setState(() => _library = library);
+    });
     // Refresh once a second so the "no data" warning appears on time.
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _status == LiveStatus.connected) setState(() {});
@@ -70,7 +85,7 @@ class _LiveScreenState extends State<LiveScreen> {
 
   Future<void> _connect() async {
     await _teardown();
-    final source = widget.sourceBuilder();
+    final source = widget.sources[_sourceIndex].build();
     _source = source;
 
     _statusSub = source.status.listen((s) {
@@ -103,14 +118,24 @@ class _LiveScreenState extends State<LiveScreen> {
     await old?.dispose();
   }
 
+  /// The ML alert for this reading, or null if there is none. It is found by
+  /// the nurse in the reading and its timestamp.
+  RiskAlert? _findMl(SensorReading reading) {
+    final fromLibrary = _library?.find(reading.userId, reading.timestamp);
+    if (fromLibrary != null) return fromLibrary;
+    // The library may not have finished loading yet: use this nurse's own.
+    final own = _mlByTime[reading.timestamp];
+    return (own != null && own.userId == reading.userId) ? own : null;
+  }
+
   void _onReading(SensorReading reading) {
     if (!mounted) return;
     _readings.add(reading);
     if (_readings.length > _maxKept) _readings.removeAt(0);
 
-    final ml = _mlByTime[reading.timestamp];
+    final ml = _findMl(reading);
     final RiskAlert alert;
-    if (ml != null && ml.userId == reading.userId) {
+    if (ml != null) {
       alert = ml;
       _alertFromMl = true;
     } else {
@@ -159,6 +184,24 @@ class _LiveScreenState extends State<LiveScreen> {
               style: const TextStyle(fontSize: 13, color: Colors.black54),
             ),
             const SizedBox(height: 14),
+            if (widget.sources.length > 1) ...[
+              SegmentedButton<int>(
+                showSelectedIcon: false,
+                segments: [
+                  for (var i = 0; i < widget.sources.length; i++)
+                    ButtonSegment(
+                      value: i,
+                      label: Text(widget.sources[i].name),
+                    ),
+                ],
+                selected: {_sourceIndex},
+                // Locked while connected, so you cannot switch by accident.
+                onSelectionChanged: (connected || busy)
+                    ? null
+                    : (s) => setState(() => _sourceIndex = s.first),
+              ),
+              const SizedBox(height: 12),
+            ],
             Row(
               children: [
                 _StatusChip(status: _status),
@@ -196,8 +239,9 @@ class _LiveScreenState extends State<LiveScreen> {
               _Notice(
                 icon: Icons.person_search,
                 color: Colors.blueGrey,
-                text: 'This insole is sending data for ${reading.userId}, '
-                    'but you are logged in as ${widget.user.userId}.',
+                text: 'This insole is sending data for ${reading.userId}, so '
+                    'the banner shows the alerts for ${reading.userId}. '
+                    'You are logged in as ${widget.user.userId}.',
               ),
             if (source is SimulatedInsoleSource)
               SwitchListTile(

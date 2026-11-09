@@ -22,6 +22,21 @@ class ShiftData {
   bool get usedFallback => fallbackCount > 0;
 }
 
+/// The ML alerts of every nurse, found by nurse and timestamp.
+///
+/// All nurses share the same timestamps, so the nurse (user_id) is needed to
+/// find the right alert. The Live tab uses this so the banner shows the alerts
+/// of whichever nurse the insole is sending data for.
+class AlertLibrary {
+  final Map<String, Map<DateTime, RiskAlert>> _byNurse;
+  const AlertLibrary(this._byNurse);
+
+  RiskAlert? find(String userId, DateTime timestamp) =>
+      _byNurse[userId]?[timestamp];
+
+  int get nurseCount => _byNurse.length;
+}
+
 class ShiftRepository {
   static const String nursesAsset = 'assets/app_demo/nurses.json';
 
@@ -32,6 +47,26 @@ class ShiftRepository {
       for (var i = 0; i < list.length; i++)
         NurseUser.fromJson(list[i] as Map<String, dynamic>, i),
     ];
+  }
+
+  /// Loads the ML alerts of all nurses. An alert file that is missing or
+  /// unreadable is skipped (that nurse then has no ML alerts).
+  static Future<AlertLibrary> loadAlertLibrary(List<NurseUser> nurses) async {
+    final byNurse = <String, Map<DateTime, RiskAlert>>{};
+    for (final nurse in nurses) {
+      try {
+        final raw = await rootBundle.loadString(nurse.alertsAsset);
+        final map = <DateTime, RiskAlert>{};
+        for (final e in jsonDecode(raw) as List<dynamic>) {
+          final alert = RiskAlert.fromJson(e as Map<String, dynamic>);
+          map[alert.timestamp] = alert;
+        }
+        byNurse[nurse.userId] = map;
+      } catch (_) {
+        // Skip this nurse.
+      }
+    }
+    return AlertLibrary(byNurse);
   }
 
   /// Loads the readings, then pairs each reading with the ML alert that has

@@ -37,9 +37,21 @@ If an alert file is missing, the app falls back to simple fixed-limit backup rul
 The Live tab shows readings arriving one per second from an *insole source*. Today the source is a **simulated insole** that replays the recorded shift as text in 20-byte chunks, exactly like the real insole's Bluetooth messages, so the whole receiving code is exercised without hardware.
 
 - **Connect / Disconnect**, with a status chip (not connected, connecting, connected, connection problem).
-- **Banner:** if an ML alert exists for the reading's timestamp (the insole currently replays the team's test data, so it does), the banner shows it. Otherwise it uses the simple backup rules and says so.
+- **Banner:** the app looks up the ML alert by the **nurse in the reading and its timestamp**, across all 10 nurses, so the banner follows whichever nurse's shift the insole is playing (all nurses share the same timestamps, so the nurse is part of the key). If no ML alert exists, it uses the simple backup rules and says so.
+- **Source switch:** when more than one source is available (Bluetooth insole and Simulated insole), choose between them above the Connect button. It is locked while connected.
 - **Warnings:** no data for 5 seconds, or the insole belongs to a different nurse than the one logged in.
 - **Unplugged sensor:** a switch simulates a null temperature, shown as "Sensor unplugged".
+
+## Demo day plan
+
+The agreed plan (Option A): the insole streams a **prepared nurse shift** over Bluetooth, and the app shows the ML alerts from the prepared alert files, matched by nurse and timestamp. Real live sensors with live ML are a stretch goal, because the ML model does not run on live readings yet.
+
+Checklist:
+1. Power the ESP32 (it advertises as `SoleGuard-001`). Close nRF Connect on every other phone: only one phone can connect.
+2. Log in on the Android phone, open the **Live** tab, choose **Bluetooth insole**, press **Connect**.
+3. A shift is 200 readings at one per second, about 3 minutes. The first alerts appear around 1 to 2 minutes in (for example NURSE-09's temperature drift at about 2 minutes).
+4. If Bluetooth fails: press **Disconnect**, choose **Simulated insole**, press **Connect**. The same screen runs without hardware. The Dashboard tab also replays any shift with play/pause and a timeline.
+5. Backup: keep a screen recording of the app working.
 
 ## Bluetooth link (from Person A, firmware)
 

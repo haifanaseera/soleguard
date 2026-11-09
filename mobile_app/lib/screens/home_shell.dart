@@ -81,10 +81,17 @@ class _HomeShellState extends State<HomeShell> {
               LiveScreen(
                 user: user,
                 shift: shift,
-                // Simulated insole for now. When Bluetooth is switched on,
-                // only this line changes.
-                sourceBuilder: () =>
-                    SimulatedInsoleSource(recorded: shift.readings),
+                nurses: widget.authService.users,
+                // The first option is used by default. When Bluetooth is
+                // switched on, add this as the FIRST option, so the simulated
+                // insole stays as a one-tap fallback:
+                //   SourceOption('Bluetooth insole', () => BleInsoleSource()),
+                sources: [
+                  SourceOption(
+                    'Simulated insole',
+                    () => SimulatedInsoleSource(recorded: shift.readings),
+                  ),
+                ],
               ),
               ProfileScreen(user: user, authService: widget.authService),
             ],

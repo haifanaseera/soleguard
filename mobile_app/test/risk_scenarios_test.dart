@@ -97,6 +97,28 @@ void main() {
     expect(alert.riskLevel, RiskLevel.normal);
   });
 
+  test('the alert library finds the right nurse\'s alert by timestamp', () async {
+    final nurses = await ShiftRepository.loadNurses();
+    final library = await ShiftRepository.loadAlertLibrary(nurses);
+    expect(library.nurseCount, 10);
+
+    // The reading in Person A's sample (NURSE-01 at 07:55:30) has an alert.
+    final soofi = library.find('NURSE-01', DateTime(2026, 10, 8, 7, 55, 30));
+    expect(soofi, isNotNull);
+    expect(soofi!.userId, 'NURSE-01');
+    expect(soofi.riskLevel, RiskLevel.normal);
+
+    // All nurses share the same timestamps, so the nurse decides the alert:
+    // at 07:58:00 NURSE-09 is in caution while NURSE-01 is normal.
+    final at = DateTime(2026, 10, 8, 7, 58, 0);
+    expect(library.find('NURSE-09', at)!.riskLevel, RiskLevel.caution);
+    expect(library.find('NURSE-01', at)!.riskLevel, RiskLevel.normal);
+
+    // Unknown nurse or time: no alert.
+    expect(library.find('NURSE-99', at), isNull);
+    expect(library.find('NURSE-01', DateTime(2020, 1, 1)), isNull);
+  });
+
   test('zone highlighting reads the ML reason text', () {
     final alert = RiskAlert(
       userId: 'NURSE-04',

@@ -28,6 +28,13 @@ abstract class InsoleSource {
   Future<void> dispose();
 }
 
+/// A choice on the Live tab, e.g. "Bluetooth insole" or "Simulated insole".
+class SourceOption {
+  final String name;
+  final InsoleSource Function() build;
+  const SourceOption(this.name, this.build);
+}
+
 /// Shared code for sources that receive text in chunks of bytes.
 ///
 /// A subclass only has to call [handleBytes] for every chunk it receives.
