@@ -20,6 +20,11 @@
 # Input  : sensor reading dict (see docs/data-contract.md)
 # Output : {user_id, timestamp, risk_level, reason}
 #
+# Missing sensor values (for example the firmware sends null for
+# temperature_celsius when the temperature sensor is unplugged) are
+# allowed: that signal is simply skipped, and the remaining signals are
+# still scored. Use missing_signals(reading) to see what is missing.
+#
 # Reason wording has two styles:
 #   "technical" - signal + how many SD above the personal baseline
 #                 (good for analysis and the viva)
@@ -79,23 +84,39 @@ ALERT_ADVICE = "Take a short break and check your feet."
 
 
 def extract_signals(reading):
-    """Flatten a contract-format reading into {signal_name: value}."""
-    p = reading["pressure"]
+    """
+    Flatten a contract-format reading into {signal_name: value}.
+    A value is None when the sensor sent null (or left the field out).
+    """
+    p = reading.get("pressure") or {}
     return {
-        "heel": p["heel"],
-        "midfoot": p["midfoot"],
-        "toe": p["toe"],
-        "temperature": reading["temperature_celsius"],
+        "heel": p.get("heel"),
+        "midfoot": p.get("midfoot"),
+        "toe": p.get("toe"),
+        "temperature": reading.get("temperature_celsius"),
     }
 
 
+def missing_signals(reading):
+    """Names of signals that are null/missing in this reading (e.g. ['temperature'])."""
+    return [s for s, v in extract_signals(reading).items() if v is None]
+
+
 def _compute_stats(signal_rows):
-    """Mean + std per signal from a list of {signal: value} dicts."""
+    """
+    Mean + std per signal from a list of {signal: value} dicts.
+    Missing (None) values are skipped. A signal with fewer than
+    MIN_CALIBRATION_READINGS real values gets None (no baseline for it,
+    so it is not scored).
+    """
     stats = {}
     for s in SIGNALS:
-        values = [row[s] for row in signal_rows]
+        values = [row[s] for row in signal_rows if row[s] is not None]
+        if len(values) < MIN_CALIBRATION_READINGS:
+            stats[s] = None
+            continue
         mean = statistics.mean(values)
-        std = statistics.stdev(values) if len(values) > 1 else 0.0
+        std = statistics.stdev(values)
         stats[s] = {"mean": mean, "std": max(std, MIN_STD[s])}
     return stats
 
@@ -127,7 +148,7 @@ def _format_value(signal, value):
 def safety_findings(reading):
     """Signals above their absolute safety limit: {signal: value}."""
     sig = extract_signals(reading)
-    return {s: sig[s] for s in SIGNALS if sig[s] > SAFETY_LIMITS[s]}
+    return {s: sig[s] for s in SIGNALS if sig[s] is not None and sig[s] > SAFETY_LIMITS[s]}
 
 
 def _safety_parts(findings, style):
@@ -205,7 +226,9 @@ class PersonalBaseline:
         clean = [
             row for row in rows
             if all(
-                abs(row[s] - first_pass[s]["mean"]) / first_pass[s]["std"] < trim_z
+                first_pass[s] is None
+                or row[s] is None
+                or abs(row[s] - first_pass[s]["mean"]) / first_pass[s]["std"] < trim_z
                 for s in SIGNALS
             )
         ]
@@ -256,6 +279,7 @@ class RiskDetector:
         return {
             s: (sig[s] - self.baseline.stats[s]["mean"]) / self.baseline.stats[s]["std"]
             for s in SIGNALS
+            if sig[s] is not None and self.baseline.stats.get(s) is not None
         }
 
     def evaluate(self, reading):

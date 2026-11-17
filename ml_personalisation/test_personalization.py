@@ -21,6 +21,7 @@ from personalization import (
     LiveScorer,
     process_reading,
     safety_check,
+    missing_signals,
     MIN_CALIBRATION_READINGS,
     SAFETY_LIMITS,
 )
@@ -318,6 +319,100 @@ class TestLiveScorer(unittest.TestCase):
         self.feed_calibration(sc)
         out = process_reading(make_reading(heel=60, temp=36), scorer=sc)
         self.assertEqual(out["risk_level"], "alert")
+
+
+
+class TestMissingSensorValues(unittest.TestCase):
+    """The firmware sends null for a signal when its sensor is unplugged."""
+
+    def setUp(self):
+        self.base = PersonalBaseline.calibrate("NURSE-A", normal_calibration())
+
+    def test_missing_signals_helper(self):
+        self.assertEqual(missing_signals(make_reading()), [])
+        self.assertEqual(missing_signals(make_reading(temp=None)), ["temperature"])
+
+    def test_normal_reading_with_null_temperature_is_normal(self):
+        out = RiskDetector(self.base).evaluate(make_reading(temp=None))
+        self.assertEqual(out["risk_level"], "normal")
+        self.assertIsNone(out["reason"])
+
+    def test_pressure_is_still_scored_without_temperature(self):
+        out = RiskDetector(self.base, style="plain").evaluate(make_reading(heel=60, temp=None))
+        self.assertEqual(out["risk_level"], "caution")      # one signal only
+        self.assertEqual(out["reason"], "Heel pressure is well above your usual.")
+
+    def test_two_pressure_zones_can_still_alert_without_temperature(self):
+        out = RiskDetector(self.base).evaluate(make_reading(heel=60, toe=48, temp=None))
+        self.assertEqual(out["risk_level"], "alert")
+
+    def test_safety_limit_still_works_without_temperature(self):
+        out = RiskDetector(self.base).evaluate(make_reading(heel=SAFETY_LIMITS["heel"] + 5, temp=None))
+        self.assertEqual(out["risk_level"], "alert")
+
+    def test_some_null_temperatures_during_calibration(self):
+        readings = normal_calibration()
+        for i in range(0, 60, 6):
+            readings[i]["temperature_celsius"] = None
+        base = PersonalBaseline.calibrate("NURSE-A", readings)
+        self.assertIsNotNone(base.stats["temperature"])
+        self.assertAlmostEqual(base.stats["temperature"]["mean"], 33, delta=0.5)
+
+    def test_all_temperatures_null_during_calibration(self):
+        readings = normal_calibration()
+        for r in readings:
+            r["temperature_celsius"] = None
+        base = PersonalBaseline.calibrate("NURSE-A", readings)
+        self.assertIsNone(base.stats["temperature"])
+        self.assertIsNotNone(base.stats["heel"])
+        # a later reading WITH a (below-limit) temperature is not scored on temperature
+        out = RiskDetector(base).evaluate(make_reading(temp=36.0))
+        self.assertEqual(out["risk_level"], "normal")
+        # ...but the fixed safety limit still applies to it
+        hot = RiskDetector(base).evaluate(make_reading(temp=SAFETY_LIMITS["temperature"] + 2))
+        self.assertEqual(hot["risk_level"], "alert")
+
+    def test_baseline_without_temperature_saves_and_loads(self):
+        readings = normal_calibration()
+        for r in readings:
+            r["temperature_celsius"] = None
+        base = PersonalBaseline.calibrate("NURSE-A", readings)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "NURSE-A.json"
+            base.save(path)
+            loaded = PersonalBaseline.load(path)
+        self.assertIsNone(loaded.stats["temperature"])
+        self.assertEqual(loaded.stats["heel"], base.stats["heel"])
+
+    def test_live_scorer_handles_null_temperature(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sc = LiveScorer(baseline_dir=tmp, calibration_readings=60)
+            for r in normal_calibration():
+                sc.process_reading(dict(r, temperature_celsius=None))
+            out = sc.process_reading(make_reading(heel=60, temp=None))
+            self.assertEqual(out["risk_level"], "caution")
+
+
+class TestMidfoot(unittest.TestCase):
+    """Midfoot pressure is scored like heel and toe."""
+
+    def setUp(self):
+        self.base = PersonalBaseline.calibrate("NURSE-A", normal_calibration())
+
+    def test_midfoot_alone_is_flagged_by_name(self):
+        out = RiskDetector(self.base, style="plain").evaluate(make_reading(midfoot=28))
+        self.assertEqual(out["risk_level"], "caution")
+        self.assertEqual(out["reason"], "Midfoot pressure is well above your usual.")
+
+    def test_midfoot_with_temperature_is_an_alert(self):
+        out = RiskDetector(self.base, style="plain").evaluate(make_reading(midfoot=28, temp=36))
+        self.assertEqual(out["risk_level"], "alert")
+        self.assertIn("midfoot pressure", out["reason"].lower())
+
+    def test_midfoot_reason_names_only_midfoot(self):
+        reason = RiskDetector(self.base, style="plain").evaluate(make_reading(midfoot=28))["reason"].lower()
+        for other in ("heel", "toe", "temperature"):
+            self.assertNotIn(other, reason)
 
 
 
