@@ -20,6 +20,12 @@
 # Input  : sensor reading dict (see docs/data-contract.md)
 # Output : {user_id, timestamp, risk_level, reason}
 #
+# Reading rate: the rules below think in "samples" taken every 30 s
+# (60 samples = 30 min of learning, 10 in a row = 5 min of standing).
+# If the insole sends faster than that (it sends 1 per second), group the
+# readings into 30-second windows first: LiveScorer(window_seconds=30) does
+# it live, and score_recording() does it for a saved recording.
+#
 # Missing sensor values (for example the firmware sends null for
 # temperature_celsius when the temperature sensor is unplugged) are
 # allowed: that signal is simply skipped, and the remaining signals are
@@ -32,7 +38,11 @@
 # ============================================================
 
 import json
+import math
 import statistics
+import tempfile
+from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 SIGNALS = ("heel", "midfoot", "toe", "temperature")
@@ -45,8 +55,12 @@ MIN_STD = {"heel": 1.0, "midfoot": 1.0, "toe": 1.0, "temperature": 0.2}
 CAUTION_Z = 2.0   # 2 <= z < 3  -> caution
 ALERT_Z = 3.0     # z >= 3      -> alert (if corroborated)
 
-# Readings arrive every 30 s, so 10 readings = 5 minutes standing.
-PROLONGED_STANDING_READINGS = 10
+# The rules assume one sample every SAMPLE_SECONDS, so 10 samples in a
+# row = 5 minutes standing, and 60 samples = 30 minutes of learning.
+SAMPLE_SECONDS = 30
+PROLONGED_STANDING_SECONDS = 300
+CALIBRATION_SECONDS = 1800
+PROLONGED_STANDING_READINGS = 10   # = PROLONGED_STANDING_SECONDS / SAMPLE_SECONDS
 
 MIN_CALIBRATION_READINGS = 10
 CALIBRATION_READINGS = 60          # first 30 min (60 x 30 s)
@@ -265,13 +279,18 @@ class RiskDetector:
     (it tracks how long the user has been standing).
 
     style: "technical" (default, SD values) or "plain" (nurse-friendly).
+    sample_seconds: seconds between the readings you feed in (30 by
+    default). It only sets how many in a row count as 5 minutes of
+    standing, and the "standing for about N min" text.
     """
 
-    def __init__(self, baseline, style="technical"):
+    def __init__(self, baseline, style="technical", sample_seconds=SAMPLE_SECONDS):
         if style not in ("technical", "plain"):
             raise ValueError("style must be 'technical' or 'plain'")
         self.baseline = baseline
         self.style = style
+        self.sample_seconds = sample_seconds
+        self.prolonged_after = max(1, math.ceil(PROLONGED_STANDING_SECONDS / sample_seconds))
         self.standing_streak = 0
 
     def z_scores(self, reading):
@@ -290,7 +309,7 @@ class RiskDetector:
             self.standing_streak += 1
         else:
             self.standing_streak = 0
-        prolonged = self.standing_streak >= PROLONGED_STANDING_READINGS
+        prolonged = self.standing_streak >= self.prolonged_after
 
         # Only HIGH readings are risky (high pressure / high temperature).
         elevated = {s: v for s, v in z.items() if v >= CAUTION_Z}
@@ -318,7 +337,7 @@ class RiskDetector:
                 for s, v in sorted(elevated.items(), key=lambda kv: -kv[1])
             ]
             if elevated and prolonged and pressure_elevated:
-                minutes = self.standing_streak * 30 / 60
+                minutes = self.standing_streak * self.sample_seconds / 60
                 parts.append(f"standing for ~{minutes:.0f} min")
             reason = _join_reason(parts, "technical")
         else:
@@ -331,7 +350,7 @@ class RiskDetector:
             if mild:
                 parts.append(_plain_sentence(mild, "above your usual"))
             if elevated and prolonged and pressure_elevated:
-                minutes = self.standing_streak * 30 / 60
+                minutes = self.standing_streak * self.sample_seconds / 60
                 parts.append(f"You have been standing for about {minutes:.0f} min.")
             if level == "alert":
                 parts.append(ALERT_ADVICE)
@@ -346,6 +365,66 @@ class RiskDetector:
 
 
 # ------------------------------------------------------------
+# 30-second windows (for readings that arrive faster than every 30 s)
+# ------------------------------------------------------------
+def _window_id(reading, window_seconds):
+    """Which fixed time window (aligned to the clock) this reading falls in."""
+    ts = reading.get("timestamp")
+    if ts is None:
+        raise ValueError("Windowing needs a timestamp on every reading")
+    return math.floor(datetime.fromisoformat(ts).timestamp() / window_seconds)
+
+
+def summarize_window(readings):
+    """
+    One reading that stands for several: the mean of each signal (ignoring
+    null values; None if every value was null), the most common motion
+    state (a tie goes to the most recent), and the last timestamp.
+    """
+    def mean_of(values):
+        values = [v for v in values if v is not None]
+        if not values:
+            return None
+        return values[0] if len(values) == 1 else statistics.mean(values)
+
+    signals = [extract_signals(r) for r in readings]
+    counts = Counter(r.get("motion_state") for r in readings)
+    top = max(counts.values())
+    motion = next(r.get("motion_state") for r in reversed(readings)
+                  if counts[r.get("motion_state")] == top)
+    last = readings[-1]
+    return {
+        "device_id": last.get("device_id"),
+        "user_id": last["user_id"],
+        "timestamp": last["timestamp"],
+        "pressure": {s: mean_of([x[s] for x in signals]) for s in PRESSURE_SIGNALS},
+        "temperature_celsius": mean_of([x["temperature"] for x in signals]),
+        "motion_state": motion,
+        "battery_percent": last.get("battery_percent"),
+        "readings_in_window": len(readings),
+    }
+
+
+def aggregate_windows(readings, window_seconds=SAMPLE_SECONDS):
+    """
+    Group one nurse's readings (in time order) into fixed windows and
+    return one summary reading per window. Readings that are already
+    window_seconds apart (or slower) come back as they are.
+    """
+    windows, current, current_id = [], [], None
+    for r in readings:
+        wid = _window_id(r, window_seconds)
+        if current and wid != current_id:
+            windows.append(summarize_window(current))
+            current = []
+        current_id = wid
+        current.append(r)
+    if current:
+        windows.append(summarize_window(current))
+    return windows
+
+
+# ------------------------------------------------------------
 # Live scoring: one reading at a time
 # ------------------------------------------------------------
 class LiveScorer:
@@ -354,36 +433,55 @@ class LiveScorer:
 
     For each user_id it:
       1. loads a saved baseline from baseline_dir if one exists;
-      2. otherwise collects the first `calibration_readings` readings,
+      2. otherwise collects the first `calibration_readings` samples,
          learns the baseline, and saves it for next time;
-      3. then scores every reading against that baseline.
+      3. then scores every sample against that baseline.
 
-    While a baseline is still being learned, readings are reported as
-    "normal" (reason None), EXCEPT readings above the safety limits, which
+    While a baseline is still being learned, samples are reported as
+    "normal" (reason None), EXCEPT samples above the safety limits, which
     are always alerts. Use status(user_id) to show "learning..." in the app.
+
+    window_seconds=None (default): every reading is one sample, so readings
+    should arrive about every 30 s (what the recorded shifts use).
+
+    window_seconds=30: readings can arrive as fast as you like (the insole
+    sends 1 per second). They are grouped into 30-second windows and the
+    window average is what gets scored. A window is scored when the next
+    one starts, so process_reading() returns the alert of the last
+    COMPLETED window, stamped with the current reading's timestamp. It
+    changes at most every 30 s, which keeps the banner from flickering.
+    Call flush(user_id) at the end of a recording to score the last window.
     """
 
-    def __init__(self, baseline_dir=None, style="plain",
-                 calibration_readings=CALIBRATION_READINGS):
+    def __init__(self, baseline_dir=None, style="plain", calibration_readings=None,
+                 window_seconds=None, sample_seconds=None):
         self.baseline_dir = Path(baseline_dir) if baseline_dir else DEFAULT_BASELINE_DIR
         self.style = style
+        self.window_seconds = window_seconds
+        self.sample_seconds = sample_seconds or window_seconds or SAMPLE_SECONDS
+        if calibration_readings is None:
+            calibration_readings = round(CALIBRATION_SECONDS / self.sample_seconds)
         self.calibration_readings = max(calibration_readings, MIN_CALIBRATION_READINGS)
         self._detectors = {}   # user_id -> RiskDetector
-        self._buffers = {}     # user_id -> calibration readings so far
+        self._buffers = {}     # user_id -> calibration samples so far
+        self._windows = {}     # user_id -> {"id", "readings", "alert"}
 
     def _baseline_path(self, user_id):
         return self.baseline_dir / f"{user_id}.json"
+
+    def _make_detector(self, baseline):
+        return RiskDetector(baseline, style=self.style, sample_seconds=self.sample_seconds)
 
     def _detector(self, user_id):
         det = self._detectors.get(user_id)
         if det is None and self._baseline_path(user_id).exists():
             baseline = PersonalBaseline.load(self._baseline_path(user_id))
-            det = RiskDetector(baseline, style=self.style)
+            det = self._make_detector(baseline)
             self._detectors[user_id] = det
         return det
 
     def status(self, user_id):
-        """{'state': 'ready'|'learning', 'readings': n, 'needed': N}"""
+        """{'state': 'ready'|'learning', 'readings': n, 'needed': N} (counts samples/windows)"""
         if self._detector(user_id) is not None:
             return {"state": "ready", "readings": self.calibration_readings,
                     "needed": self.calibration_readings}
@@ -395,26 +493,80 @@ class LiveScorer:
         """Forget this nurse's baseline so it is learned again."""
         self._detectors.pop(user_id, None)
         self._buffers.pop(user_id, None)
+        self._windows.pop(user_id, None)
         path = self._baseline_path(user_id)
         if path.exists():
             path.unlink()
 
-    def process_reading(self, reading):
-        """Return the alert dict (user_id, timestamp, risk_level, reason)."""
-        user_id = reading["user_id"]
+    def _score_sample(self, sample):
+        """Learn from / score ONE sample (a reading, or a window summary)."""
+        user_id = sample["user_id"]
         detector = self._detector(user_id)
         if detector is not None:
-            return detector.evaluate(reading)
+            return detector.evaluate(sample)
 
         # Still learning this nurse's baseline.
         buffer = self._buffers.setdefault(user_id, [])
-        buffer.append(reading)
+        buffer.append(sample)
         if len(buffer) >= self.calibration_readings:
             baseline = PersonalBaseline.calibrate(user_id, buffer)
             baseline.save(self._baseline_path(user_id))
-            self._detectors[user_id] = RiskDetector(baseline, style=self.style)
+            self._detectors[user_id] = self._make_detector(baseline)
             del self._buffers[user_id]
-        return safety_check(reading, self.style)
+        return safety_check(sample, self.style)
+
+    def _finish_window(self, user_id):
+        w = self._windows.get(user_id)
+        if not w or not w["readings"]:
+            return None
+        w["alert"] = self._score_sample(summarize_window(w["readings"]))
+        w["readings"] = []
+        w["id"] = None
+        return w["alert"]
+
+    def flush(self, user_id):
+        """Score the window still being filled (use at the end of a recording)."""
+        return self._finish_window(user_id)
+
+    def process_reading(self, reading):
+        """Return the alert dict (user_id, timestamp, risk_level, reason)."""
+        if self.window_seconds is None:
+            return self._score_sample(reading)
+
+        user_id = reading["user_id"]
+        w = self._windows.setdefault(user_id, {"id": None, "readings": [], "alert": None})
+        wid = _window_id(reading, self.window_seconds)
+        if w["id"] is not None and wid != w["id"]:
+            self._finish_window(user_id)
+        w["id"] = wid
+        w["readings"].append(reading)
+
+        alert = w["alert"]
+        return {
+            "user_id": user_id,
+            "timestamp": reading["timestamp"],
+            "risk_level": alert["risk_level"] if alert else "normal",
+            "reason": alert["reason"] if alert else None,
+        }
+
+
+def score_recording(readings, window_seconds=SAMPLE_SECONDS, calibration_windows=None,
+                    style="plain"):
+    """
+    Score a saved recording of ONE nurse (readings in time order, any rate).
+    The readings are grouped into windows; the first `calibration_windows`
+    windows teach the baseline (default 60 = 30 min with 30 s windows).
+    Returns one alert per window; each alert is stamped with the window's
+    last timestamp. Nothing is saved to disk.
+    """
+    if len({r["user_id"] for r in readings}) > 1:
+        raise ValueError("score_recording takes one nurse at a time")
+    samples = aggregate_windows(readings, window_seconds)
+    with tempfile.TemporaryDirectory() as tmp:
+        scorer = LiveScorer(baseline_dir=tmp, style=style,
+                            calibration_readings=calibration_windows,
+                            sample_seconds=window_seconds)
+        return [scorer.process_reading(sample) for sample in samples]
 
 
 _default_scorer = None

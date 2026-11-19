@@ -11,6 +11,7 @@ import random
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -22,6 +23,9 @@ from personalization import (
     process_reading,
     safety_check,
     missing_signals,
+    aggregate_windows,
+    summarize_window,
+    score_recording,
     MIN_CALIBRATION_READINGS,
     SAFETY_LIMITS,
 )
@@ -413,6 +417,156 @@ class TestMidfoot(unittest.TestCase):
         reason = RiskDetector(self.base, style="plain").evaluate(make_reading(midfoot=28))["reason"].lower()
         for other in ("heel", "toe", "temperature"):
             self.assertNotIn(other, reason)
+
+
+
+def stamped(readings, seconds_apart, start=datetime(2026, 10, 8, 7, 0, 0)):
+    """Give readings real timestamps, seconds_apart seconds from each other."""
+    out = []
+    for i, r in enumerate(readings):
+        out.append(dict(r, timestamp=(start + timedelta(seconds=i * seconds_apart)).isoformat()))
+    return out
+
+
+def one_hz_shift(normal_seconds=1800, raised_seconds=300, seed=3):
+    """A 1-reading-per-second shift: normal, then heel/toe/temperature raised."""
+    rng = random.Random(seed)
+    readings = []
+    for i in range(normal_seconds + raised_seconds):
+        raised = i >= normal_seconds
+        readings.append(make_reading(
+            heel=rng.uniform(35, 45) + (14 if raised else 0),
+            midfoot=rng.uniform(15, 22),
+            toe=rng.uniform(25, 35) + (10 if raised else 0),
+            temp=rng.uniform(32, 34) + (3 if raised else 0),
+            motion="walking",
+        ))
+    return stamped(readings, 1)
+
+
+class TestWindowing(unittest.TestCase):
+    def test_one_summary_per_30_second_window(self):
+        readings = stamped([make_reading() for _ in range(90)], 1)   # 90 s at 1 per second
+        windows = aggregate_windows(readings, 30)
+        self.assertEqual(len(windows), 3)
+        self.assertTrue(all(w["readings_in_window"] == 30 for w in windows))
+
+    def test_window_holds_the_mean(self):
+        heels = list(range(30))                                   # 0..29, mean 14.5
+        readings = stamped([make_reading(heel=h) for h in heels], 1)
+        (window,) = aggregate_windows(readings, 30)
+        self.assertAlmostEqual(window["pressure"]["heel"], 14.5)
+
+    def test_window_timestamp_is_the_last_reading(self):
+        readings = stamped([make_reading() for _ in range(30)], 1)
+        (window,) = aggregate_windows(readings, 30)
+        self.assertEqual(window["timestamp"], readings[-1]["timestamp"])
+
+    def test_most_common_motion_state_wins_and_ties_go_to_the_latest(self):
+        states = ["standing"] * 20 + ["walking"] * 10
+        readings = stamped([make_reading(motion=m) for m in states], 1)
+        self.assertEqual(summarize_window(readings)["motion_state"], "standing")
+        tie = stamped([make_reading(motion=m) for m in ["standing"] * 5 + ["walking"] * 5], 1)
+        self.assertEqual(summarize_window(tie)["motion_state"], "walking")
+
+    def test_null_values_are_skipped_in_the_mean(self):
+        temps = [None] * 10 + [34.0] * 20
+        readings = stamped([make_reading(temp=t) for t in temps], 1)
+        (window,) = aggregate_windows(readings, 30)
+        self.assertAlmostEqual(window["temperature_celsius"], 34.0)
+
+    def test_window_with_only_null_temperature_has_none(self):
+        readings = stamped([make_reading(temp=None) for _ in range(30)], 1)
+        (window,) = aggregate_windows(readings, 30)
+        self.assertIsNone(window["temperature_celsius"])
+
+    def test_readings_already_30_seconds_apart_are_unchanged(self):
+        readings = stamped(normal_calibration(n=20), 30)
+        windows = aggregate_windows(readings, 30)
+        self.assertEqual(len(windows), 20)
+        for r, w in zip(readings, windows):
+            self.assertEqual(r["pressure"], w["pressure"])
+            self.assertEqual(r["temperature_celsius"], w["temperature_celsius"])
+
+    def test_missing_timestamp_is_a_clear_error(self):
+        with self.assertRaises(ValueError):
+            aggregate_windows([make_reading() | {"timestamp": None}], 30)
+
+
+class TestWindowedScoring(unittest.TestCase):
+    def test_one_hz_shift_raises_an_alert_soon_after_the_change(self):
+        shift = one_hz_shift()
+        with tempfile.TemporaryDirectory() as tmp:
+            sc = LiveScorer(baseline_dir=tmp, window_seconds=30)
+            alerts = [sc.process_reading(r) for r in shift]
+            self.assertEqual(sc.status("NURSE-A")["state"], "ready")
+        step = 1800
+        before = alerts[1800 // 2:step]            # second half of the normal stretch
+        self.assertTrue(all(a["risk_level"] != "alert" for a in before))
+        first_alert = next(i for i, a in enumerate(alerts) if i >= step and a["risk_level"] == "alert")
+        self.assertLess(first_alert - step, 70)    # within about one or two windows
+
+    def test_alert_only_changes_when_a_window_completes(self):
+        shift = one_hz_shift()
+        with tempfile.TemporaryDirectory() as tmp:
+            sc = LiveScorer(baseline_dir=tmp, window_seconds=30)
+            levels = [sc.process_reading(r)["risk_level"] for r in shift]
+        changes = sum(1 for a, b in zip(levels, levels[1:]) if a != b)
+        windows = len(shift) // 30
+        self.assertLessEqual(changes, windows)      # at most one change per window
+
+    def test_alerts_carry_the_current_reading_timestamp(self):
+        shift = one_hz_shift(normal_seconds=300, raised_seconds=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            sc = LiveScorer(baseline_dir=tmp, window_seconds=30)
+            for r in shift:
+                self.assertEqual(sc.process_reading(r)["timestamp"], r["timestamp"])
+
+    def test_flush_scores_the_last_window(self):
+        shift = one_hz_shift(normal_seconds=1800, raised_seconds=20)
+        with tempfile.TemporaryDirectory() as tmp:
+            sc = LiveScorer(baseline_dir=tmp, window_seconds=30)
+            for r in shift:
+                sc.process_reading(r)
+            last = sc.flush("NURSE-A")
+        self.assertIsNotNone(last)
+        self.assertIn(last["risk_level"], ("normal", "caution", "alert"))
+
+    def test_score_recording_returns_one_alert_per_window(self):
+        shift = one_hz_shift(normal_seconds=1800, raised_seconds=300)
+        alerts = score_recording(shift, window_seconds=30)
+        self.assertEqual(len(alerts), len(aggregate_windows(shift, 30)))
+        self.assertTrue(any(a["risk_level"] == "alert" for a in alerts[60:]))
+        self.assertTrue(all(a["risk_level"] == "normal" for a in alerts[:59]))
+
+    def test_short_recording_can_use_fewer_learning_windows(self):
+        shift = one_hz_shift(normal_seconds=600, raised_seconds=120)
+        alerts = score_recording(shift, window_seconds=30, calibration_windows=10)
+        self.assertTrue(any(a["risk_level"] == "alert" for a in alerts[10:]))
+
+    def test_windowed_scoring_of_30_second_data_lags_one_reading(self):
+        # A window is scored when the next one starts, so the alert for
+        # reading k+1 is the alert unwindowed scoring gives reading k.
+        data = stamped(normal_calibration(n=60) + [make_reading(heel=60, temp=36), make_reading(),
+                                                   make_reading(heel=60, temp=36), make_reading()], 30)
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            plain = LiveScorer(baseline_dir=t1)
+            windowed = LiveScorer(baseline_dir=t2, window_seconds=30)
+            a = [plain.process_reading(r) for r in data]
+            b = [windowed.process_reading(r) for r in data]
+        key = lambda x: (x["risk_level"], x["reason"])
+        self.assertEqual([key(x) for x in b[1:]], [key(x) for x in a[:-1]])
+
+    def test_standing_rule_uses_the_sample_interval(self):
+        base = PersonalBaseline.calibrate("NURSE-A", normal_calibration())
+        det = RiskDetector(base, sample_seconds=10)       # 30 samples = 5 minutes
+        for _ in range(29):
+            det.evaluate(make_reading(motion="standing"))
+        self.assertEqual(det.evaluate(make_reading(heel=60, motion="standing"))["risk_level"], "alert")
+        det = RiskDetector(base, sample_seconds=10)
+        for _ in range(28):
+            det.evaluate(make_reading(motion="standing"))
+        self.assertEqual(det.evaluate(make_reading(heel=60, motion="standing"))["risk_level"], "caution")
 
 
 
